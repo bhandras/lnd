@@ -525,6 +525,61 @@ func (d *DB) LookupInvoice(paymentHash [32]byte) (Invoice, error) {
 	return invoice, nil
 }
 
+// FetchAllInvoicesWithPaymentHash returns all invoices and their payment hashes
+// currently stored within the database. If the pendingOnly param is true, then
+// only unsettled invoices and their payment hashes will be returned, skipping
+// all invoices that are fully settled.
+func (d *DB) FetchAllInvoicesWithPaymentHash(pendingOnly bool) (
+	[]Invoice, []lntypes.Hash, error) {
+
+	var fetchedInvoices []Invoice
+	var fetchedHashes []lntypes.Hash
+
+	err := d.View(func(tx *bbolt.Tx) error {
+		invoices := tx.Bucket(invoiceBucket)
+		if invoices == nil {
+			return ErrInvoiceNotFound
+		}
+
+		invoiceIndex := invoices.Bucket(invoiceIndexBucket)
+		if invoiceIndex == nil {
+			return ErrInvoiceNotFound
+		}
+
+		return invoiceIndex.ForEach(func(k, v []byte) error {
+			if v == nil {
+				return nil
+			}
+
+			invoice, err := fetchInvoice(v, invoices)
+			if err != nil {
+				return err
+			}
+
+			if pendingOnly &&
+				(invoice.State == ContractSettled ||
+					invoice.State == ContractCanceled) {
+
+				return nil
+			}
+
+			fetchedInvoices = append(fetchedInvoices, invoice)
+
+			var hash lntypes.Hash
+			copy(hash[:], k[:lntypes.HashSize])
+			fetchedHashes = append(fetchedHashes, hash)
+
+			return nil
+		})
+	})
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return fetchedInvoices, fetchedHashes, nil
+}
+
 // FetchAllInvoices returns all invoices currently stored within the database.
 // If the pendingOnly param is true, then only unsettled invoices will be
 // returned, skipping all invoices that are fully settled.
