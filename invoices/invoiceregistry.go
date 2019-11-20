@@ -88,7 +88,6 @@ type InvoiceRegistry struct {
 // layer. The in-memory layer is in place such that debug invoices can be added
 // which are volatile yet available system wide within the daemon.
 func NewRegistry(cdb *channeldb.DB, finalCltvRejectDelta int32) *InvoiceRegistry {
-
 	return &InvoiceRegistry{
 		cdb:                       cdb,
 		notificationClients:       make(map[uint32]*InvoiceSubscription),
@@ -381,7 +380,6 @@ func (i *InvoiceRegistry) deliverSingleBacklogEvents(
 // AddIndex on the invoice argument.
 func (i *InvoiceRegistry) AddInvoice(invoice *channeldb.Invoice,
 	paymentHash lntypes.Hash) (uint64, error) {
-
 	i.Lock()
 	defer i.Unlock()
 
