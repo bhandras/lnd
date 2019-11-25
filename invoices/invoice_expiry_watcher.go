@@ -1,7 +1,6 @@
 package invoices
 
 import (
-	"math"
 	"sync"
 	"time"
 
@@ -125,15 +124,15 @@ func (ew *InvoiceExpiryWatcher) AddInvoice(
 	}
 }
 
-// nextExpiry returns the duraton until we must wait for the next invoice to
-// expire. If there are no active invoices, then it simply returns max duration.
-func (ew *InvoiceExpiryWatcher) nextExpiry() time.Duration {
+// nextExpiry returns a Time chan to wait on until the next invoice expires.
+// If there are no active invoices, then it'll simply wait indefinitly.
+func (ew *InvoiceExpiryWatcher) nextExpiry() <-chan time.Time {
 	if !ew.expiryQueue.Empty() {
 		top := ew.expiryQueue.Top().(*invoiceExpiry)
-		return top.Expiry.Sub(ew.clock.Now())
+		return time.After(top.Expiry.Sub(ew.clock.Now()))
 	}
 
-	return time.Duration(math.MaxInt64)
+	return nil
 }
 
 // cancelExpiredInvoices will cancel all expired invoices and removes them from
@@ -165,7 +164,7 @@ func (ew *InvoiceExpiryWatcher) mainLoop() {
 		ew.cancelExpiredInvoices()
 
 		select {
-		case <-time.After(ew.nextExpiry()):
+		case <-ew.nextExpiry():
 			// Wait until the next invoice expires, then cancel expired invoices.
 			continue
 
