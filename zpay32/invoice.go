@@ -171,6 +171,14 @@ type Invoice struct {
 	Features *lnwire.FeatureVector
 }
 
+func DefaultInvoiceExpiry(expiry time.Duration) time.Duration {
+	if expiry == 0 {
+		return time.Hour
+	}
+
+	return expiry
+}
+
 // Amount is a functional option that allows callers of NewInvoice to set the
 // amount in millisatoshis that the Invoice should encode.
 func Amount(milliSat lnwire.MilliSatoshi) func(*Invoice) {

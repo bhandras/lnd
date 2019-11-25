@@ -9,6 +9,7 @@ import (
 	"github.com/lightningnetwork/lnd/clock"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/queue"
+	"github.com/lightningnetwork/lnd/zpay32"
 )
 
 // invoiceExpiry holds and invoice's payment hash and its expiry. This
@@ -21,7 +22,7 @@ type invoiceExpiry struct {
 // Less implements PriorityQueueItem.Less such that the top item in the
 // priorty queue will be the one with that expires next.
 func (e invoiceExpiry) Less(other queue.PriorityQueueItem) bool {
-	return e.Expiry.Before(other.(invoiceExpiry).Expiry)
+	return e.Expiry.Before(other.(*invoiceExpiry).Expiry)
 }
 
 // InvoiceExpiryWatcher handles automatic invoice cancellation of expried
@@ -111,7 +112,9 @@ func (ew *InvoiceExpiryWatcher) AddInvoice(
 		return
 	}
 
-	expiry := invoice.CreationDate.Add(invoice.Terms.Expiry)
+	expiry := invoice.CreationDate.Add(
+		zpay32.DefaultInvoiceExpiry(invoice.Terms.Expiry))
+
 	log.Debugf("Adding invoice '%v' to expiry watcher, expiration: %v",
 		paymentHash, expiry)
 

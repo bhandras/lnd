@@ -22,6 +22,7 @@ import (
 	sphinx "github.com/lightningnetwork/lightning-onion"
 	"github.com/lightningnetwork/lnd/chainntnfs"
 	"github.com/lightningnetwork/lnd/channeldb"
+	"github.com/lightningnetwork/lnd/clock"
 	"github.com/lightningnetwork/lnd/contractcourt"
 	"github.com/lightningnetwork/lnd/htlcswitch/hop"
 	"github.com/lightningnetwork/lnd/input"
@@ -791,8 +792,8 @@ func newMockRegistry(minDelta uint32) *mockInvoiceRegistry {
 	}
 
 	finalCltvRejectDelta := int32(5)
-
-	registry := invoices.NewRegistry(cdb, finalCltvRejectDelta)
+	expiryWatcher := invoices.NewInvoiceExpiryWatcher(&clock.DefaultClock{})
+	registry := invoices.NewRegistry(cdb, expiryWatcher, finalCltvRejectDelta)
 	registry.Start()
 
 	return &mockInvoiceRegistry{
