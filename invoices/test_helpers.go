@@ -59,23 +59,37 @@ var (
 	testFeatures = lnwire.NewFeatureVector(
 		nil, lnwire.Features,
 	)
+
+	testNow = time.Date(2017, time.July, 21, 12, 0, 0, 0, time.UTC)
+
+	testInvoiceCreationDate = testNow
 )
+
+type testClock struct{}
+
+func (t *testClock) Now() time.Time {
+	return testNow
+}
 
 var (
 	testInvoice = &channeldb.Invoice{
 		Terms: channeldb.ContractTerm{
 			PaymentPreimage: testInvoicePreimage,
 			Value:           lnwire.MilliSatoshi(100000),
+			Expiry:          time.Hour,
 			Features:        testFeatures,
 		},
+		CreationDate: testInvoiceCreationDate,
 	}
 
 	testHodlInvoice = &channeldb.Invoice{
 		Terms: channeldb.ContractTerm{
 			PaymentPreimage: channeldb.UnknownPreimage,
 			Value:           lnwire.MilliSatoshi(100000),
+			Expiry:          time.Hour,
 			Features:        testFeatures,
 		},
+		CreationDate: testInvoiceCreationDate,
 	}
 )
 
@@ -108,8 +122,10 @@ func newTestContext(t *testing.T) (*InvoiceRegistry, func()) {
 		t.Fatal(err)
 	}
 
+	expiryWatcher := NewInvoiceExpiryWatcher(&testClock{})
+
 	// Instantiate and start the invoice registry.
-	registry := NewRegistry(cdb, testFinalCltvRejectDelta)
+	registry := NewRegistry(cdb, expiryWatcher, testFinalCltvRejectDelta)
 
 	err = registry.Start()
 	if err != nil {

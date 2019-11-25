@@ -79,6 +79,8 @@ type InvoiceRegistry struct {
 	// not be hit.
 	finalCltvRejectDelta int32
 
+	expiryWatcher *InvoiceExpiryWatcher
+
 	wg   sync.WaitGroup
 	quit chan struct{}
 }
@@ -87,7 +89,9 @@ type InvoiceRegistry struct {
 // wraps the persistent on-disk invoice storage with an additional in-memory
 // layer. The in-memory layer is in place such that debug invoices can be added
 // which are volatile yet available system wide within the daemon.
-func NewRegistry(cdb *channeldb.DB, finalCltvRejectDelta int32) *InvoiceRegistry {
+func NewRegistry(cdb *channeldb.DB, expiryWatcher *InvoiceExpiryWatcher,
+	finalCltvRejectDelta int32) *InvoiceRegistry {
+
 	return &InvoiceRegistry{
 		cdb:                       cdb,
 		notificationClients:       make(map[uint32]*InvoiceSubscription),
@@ -98,14 +102,17 @@ func NewRegistry(cdb *channeldb.DB, finalCltvRejectDelta int32) *InvoiceRegistry
 		hodlSubscriptions:         make(map[channeldb.CircuitKey]map[chan<- interface{}]struct{}),
 		hodlReverseSubscriptions:  make(map[chan<- interface{}]map[channeldb.CircuitKey]struct{}),
 		finalCltvRejectDelta:      finalCltvRejectDelta,
+		expiryWatcher:             expiryWatcher,
 		quit:                      make(chan struct{}),
 	}
 }
 
 // Start starts the registry and all goroutines it needs to carry out its task.
 func (i *InvoiceRegistry) Start() error {
-	i.wg.Add(1)
+	i.expiryWatcher.Start(i.CancelInvoice)
+	i.expiryWatcher.PrefetchInvoices(i.cdb)
 
+	i.wg.Add(1)
 	go i.invoiceEventNotifier()
 
 	return nil
@@ -113,6 +120,8 @@ func (i *InvoiceRegistry) Start() error {
 
 // Stop signals the registry for a graceful shutdown.
 func (i *InvoiceRegistry) Stop() {
+	i.expiryWatcher.Stop()
+
 	close(i.quit)
 
 	i.wg.Wait()
@@ -393,6 +402,8 @@ func (i *InvoiceRegistry) AddInvoice(invoice *channeldb.Invoice,
 	if err != nil {
 		return 0, err
 	}
+
+	i.expiryWatcher.AddInvoice(paymentHash, invoice)
 
 	// Now that we've added the invoice, we'll send dispatch a message to
 	// notify the clients of this new invoice.
