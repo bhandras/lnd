@@ -171,7 +171,9 @@ type Invoice struct {
 	Features *lnwire.FeatureVector
 }
 
-func DefaultInvoiceExpiry(expiry time.Duration) time.Duration {
+// ToInvoiceExpiry returns the passed expiry if it is non-zero, otherwise
+// it returns the default one hour.
+func ToInvoiceExpiry(expiry time.Duration) time.Duration {
 	if expiry == 0 {
 		return time.Hour
 	}

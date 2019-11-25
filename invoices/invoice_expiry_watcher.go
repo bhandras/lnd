@@ -113,7 +113,8 @@ func (ew *InvoiceExpiryWatcher) AddInvoice(
 	}
 
 	expiry := invoice.CreationDate.Add(
-		zpay32.DefaultInvoiceExpiry(invoice.Terms.Expiry))
+		zpay32.ToInvoiceExpiry(invoice.Terms.Expiry),
+	)
 
 	log.Debugf("Adding invoice '%v' to expiry watcher, expiration: %v",
 		paymentHash, expiry)
