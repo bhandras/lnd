@@ -139,7 +139,7 @@ func (ew *InvoiceExpiryWatcher) AddInvoice(
 }
 
 // nextExpiry returns a Time chan to wait on until the next invoice expires.
-// If there are no active invoices, then it'll simply wait indefinitly.
+// If there are no active invoices, then it'll simply wait indefinitely.
 func (ew *InvoiceExpiryWatcher) nextExpiry() <-chan time.Time {
 	if !ew.expiryQueue.Empty() {
 		top := ew.expiryQueue.Top().(*invoiceExpiry)

@@ -14,15 +14,18 @@ func TestInvoiceExpiry(t *testing.T) {
 	watcher := NewInvoiceExpiryWatcher(&testClock{})
 	defer watcher.Stop()
 	cancelCalled := make(chan interface{})
-
-	watcher.Start(func(hash lntypes.Hash) error {
+	cancelFunc := func(hash lntypes.Hash) error {
 		if hash != testInvoicePaymentHash {
 			t.Fatalf("Expected: %v, got: %v", testInvoicePaymentHash, hash)
 		}
 
 		close(cancelCalled)
 		return nil
-	})
+	}
+
+	if err := watcher.Start(cancelFunc); err != nil {
+		t.Fatalf("unexpected failure while calling Start(): %v", err)
+	}
 
 	testExpiry := time.Hour
 
