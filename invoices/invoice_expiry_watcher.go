@@ -1,6 +1,7 @@
 package invoices
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -34,8 +35,8 @@ func (e invoiceExpiry) Less(other queue.PriorityQueueItem) bool {
 // If any of the watched invoices expire, they'll be removed from the watching
 // queue and will be cancelled through InvoiceRegistry.CancelInvoice.
 type InvoiceExpiryWatcher struct {
-	started sync.Once
-	stopped sync.Once
+	sync.Mutex
+	started bool
 	wg      sync.WaitGroup
 
 	// clock is the clock implementation that InvoiceExpiryWatcher uses.
@@ -83,21 +84,34 @@ func (ew *InvoiceExpiryWatcher) PrefetchInvoices(cdb *channeldb.DB) {
 
 // Start starts the the subscription handler and the main loop. Start() can
 // only be called once.
-func (ew *InvoiceExpiryWatcher) Start(cancelInvoice func(lntypes.Hash) error) {
-	ew.started.Do(func() {
-		ew.cancelInvoice = cancelInvoice
-		ew.wg.Add(1)
-		go ew.mainLoop()
-	})
+func (ew *InvoiceExpiryWatcher) Start(
+	cancelInvoice func(lntypes.Hash) error) error {
+	ew.Lock()
+	defer ew.Unlock()
+
+	if ew.started {
+		return fmt.Errorf("InvoiceExpiryWatcher already started")
+	}
+
+	ew.started = true
+	ew.cancelInvoice = cancelInvoice
+	ew.wg.Add(1)
+	go ew.mainLoop()
+
+	return nil
 }
 
 // Stop cancels the invoice subscription and stops the expiry handler loop.
 func (ew *InvoiceExpiryWatcher) Stop() {
-	ew.stopped.Do(func() {
+	ew.Lock()
+	defer ew.Unlock()
+
+	if ew.started {
 		// Signal subscriptionHandler to quit and wait for it to return.
 		close(ew.quit)
 		ew.wg.Wait()
-	})
+		ew.started = false
+	}
 }
 
 // AddInvoice adds a new invoice to the InvoiceExpiryWatcher. This won't check
