@@ -76,10 +76,10 @@ func (ew *InvoiceExpiryWatcher) PrefetchInvoices(cdb *channeldb.DB) error {
 			"Error while prefetching active invoices from the database: %v", err,
 		)
 		return err
-	} else {
-		for k := 0; k < len(pendingInvoices); k++ {
-			ew.AddInvoice(pendingInvoices[k].PaymentHash, &pendingInvoices[k].Invoice)
-		}
+	}
+
+	for k := 0; k < len(pendingInvoices); k++ {
+		ew.AddInvoice(pendingInvoices[k].PaymentHash, &pendingInvoices[k].Invoice)
 	}
 
 	return nil
