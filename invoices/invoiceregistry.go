@@ -109,11 +109,15 @@ func NewRegistry(cdb *channeldb.DB, expiryWatcher *InvoiceExpiryWatcher,
 
 // Start starts the registry and all goroutines it needs to carry out its task.
 func (i *InvoiceRegistry) Start() error {
+	// Start InvoiceExpiryWatcher and prepopulate it with existing active
+	// invoices.
 	if err := i.expiryWatcher.Start(i.CancelInvoice); err != nil {
 		return err
 	}
 
-	i.expiryWatcher.PrefetchInvoices(i.cdb)
+	if err := i.expiryWatcher.PrefetchInvoices(i.cdb); err != nil {
+		return err
+	}
 
 	i.wg.Add(1)
 	go i.invoiceEventNotifier()

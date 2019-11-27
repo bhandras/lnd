@@ -26,14 +26,12 @@ func (e invoiceExpiry) Less(other queue.PriorityQueueItem) bool {
 }
 
 // InvoiceExpiryWatcher handles automatic invoice cancellation of expried
-// invoices.
-// Upon start InvoiceExpiryWatcher will subscribe to all invoice events and
-// will add all active (not yet settled and not yet cancelled) invoices to its
-// watcing queue.
-// When a new invoice is added to the InvoiceRegistry, InvoiceExpiryWatcher
-// will add that to the watching queue as well.
+// invoices. Upon start InvoiceExpiryWatcher will retrieve all pending (not yet
+// settled or canceled) invoices invoices to its watcing queue. When a new
+// invoice is added to the InvoiceRegistry, it'll be forarded to the
+// InvoiceExpiryWatcher and will end up in the watching queue as well.
 // If any of the watched invoices expire, they'll be removed from the watching
-// queue and will be cancelled through InvoiceRegistry.CancelInvoice.
+// queue and will be cancelled through InvoiceRegistry.CancelInvoice().
 type InvoiceExpiryWatcher struct {
 	sync.Mutex
 	started bool
@@ -68,22 +66,29 @@ func NewInvoiceExpiryWatcher(clock clock.Clock) *InvoiceExpiryWatcher {
 }
 
 // PrefetchInvoices fetches all active invoices and their corresponding payment
-// hashes from ChannelDB and adds them to the watcher. This is useful to
-// prepopulate the watcher with past, but active invoices upon start.
-func (ew *InvoiceExpiryWatcher) PrefetchInvoices(cdb *channeldb.DB) {
+// hashes from ChannelDB and adds them to the watcher queue. This is useful to
+// prepopulate InvoiceExpiryWatcher with past, but active invoices upon start.
+func (ew *InvoiceExpiryWatcher) PrefetchInvoices(cdb *channeldb.DB) error {
 	pendingOnly := true
-	invoices, hashes, err := cdb.FetchAllInvoicesWithPaymentHash(pendingOnly)
-	if err != nil {
-		log.Errorf("Error fetching invoices from the database: %v", err)
+	pendingInvoices, err := cdb.FetchAllInvoicesWithPaymentHash(pendingOnly)
+	if err != nil && err != channeldb.ErrNoInvoicesCreated {
+		log.Errorf(
+			"Error while prefetching active invoices from the database: %v", err,
+		)
+		return err
 	} else {
-		for k := 0; k < len(invoices); k++ {
-			ew.AddInvoice(hashes[k], &invoices[k])
+		for k := 0; k < len(pendingInvoices); k++ {
+			ew.AddInvoice(pendingInvoices[k].PaymentHash, &pendingInvoices[k].Invoice)
 		}
 	}
+
+	return nil
 }
 
-// Start starts the the subscription handler and the main loop. Start() can
-// only be called once.
+// Start starts the the subscription handler and the main loop. Start() will
+// return with error if InvoiceExpiryWatcher is already started. Start()
+// expects a cancellation function passed that will be use to cancel expired
+// invoices by their payment hash.
 func (ew *InvoiceExpiryWatcher) Start(
 	cancelInvoice func(lntypes.Hash) error) error {
 	ew.Lock()
@@ -101,7 +106,8 @@ func (ew *InvoiceExpiryWatcher) Start(
 	return nil
 }
 
-// Stop cancels the invoice subscription and stops the expiry handler loop.
+// Stop quits the expiry handler loop and waits for InvoiceExpiryWatcher to
+// fully stop.
 func (ew *InvoiceExpiryWatcher) Stop() {
 	ew.Lock()
 	defer ew.Unlock()
@@ -168,8 +174,8 @@ func (ew *InvoiceExpiryWatcher) cancelExpiredInvoices() {
 	}
 }
 
-// mainLoop receives invoice events and handles cancellaton. Only new invoices
-// that are not already settled or canceled will be added to the queue.
+// mainLoop is a goroutine that receives new invoices and handles cancellation
+// of expired invoices.
 func (ew *InvoiceExpiryWatcher) mainLoop() {
 	defer ew.wg.Done()
 

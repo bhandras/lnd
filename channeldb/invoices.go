@@ -525,28 +525,42 @@ func (d *DB) LookupInvoice(paymentHash [32]byte) (Invoice, error) {
 	return invoice, nil
 }
 
+// InvoiceWithPaymentHash is used to store an invoice and its corresponding
+// payment hash. This struct is only used to store results of
+// ChannelDB.FetchAllInvoicesWithPaymentHash() call.
+type InvoiceWithPaymentHash struct {
+	Invoice     Invoice
+	PaymentHash lntypes.Hash
+}
+
 // FetchAllInvoicesWithPaymentHash returns all invoices and their payment hashes
 // currently stored within the database. If the pendingOnly param is true, then
 // only unsettled invoices and their payment hashes will be returned, skipping
-// all invoices that are fully settled.
+// all invoices that are fully settled or canceled. Note that the returned
+// array is not ordered by add index.
 func (d *DB) FetchAllInvoicesWithPaymentHash(pendingOnly bool) (
-	[]Invoice, []lntypes.Hash, error) {
+	[]InvoiceWithPaymentHash, error) {
 
-	var fetchedInvoices []Invoice
-	var fetchedHashes []lntypes.Hash
+	var result []InvoiceWithPaymentHash
 
 	err := d.View(func(tx *bbolt.Tx) error {
 		invoices := tx.Bucket(invoiceBucket)
 		if invoices == nil {
-			return ErrInvoiceNotFound
+			return ErrNoInvoicesCreated
 		}
 
 		invoiceIndex := invoices.Bucket(invoiceIndexBucket)
 		if invoiceIndex == nil {
-			return ErrInvoiceNotFound
+			return ErrNoInvoicesCreated
 		}
 
 		return invoiceIndex.ForEach(func(k, v []byte) error {
+			// Skip the special numInvoicesKey as that does not
+			// point to a valid invoice.
+			if bytes.Equal(k, numInvoicesKey) {
+				return nil
+			}
+
 			if v == nil {
 				return nil
 			}
@@ -563,21 +577,22 @@ func (d *DB) FetchAllInvoicesWithPaymentHash(pendingOnly bool) (
 				return nil
 			}
 
-			fetchedInvoices = append(fetchedInvoices, invoice)
+			invoiceWithPaymentHash := InvoiceWithPaymentHash{
+				Invoice: invoice,
+			}
 
-			var hash lntypes.Hash
-			copy(hash[:], k[:lntypes.HashSize])
-			fetchedHashes = append(fetchedHashes, hash)
+			copy(invoiceWithPaymentHash.PaymentHash[:], k[:lntypes.HashSize])
+			result = append(result, invoiceWithPaymentHash)
 
 			return nil
 		})
 	})
 
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	return fetchedInvoices, fetchedHashes, nil
+	return result, nil
 }
 
 // FetchAllInvoices returns all invoices currently stored within the database.
