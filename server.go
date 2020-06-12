@@ -3325,6 +3325,39 @@ func (s *server) DisconnectPeer(pubKey *btcec.PublicKey) error {
 	return nil
 }
 
+// getActivePeers returns active peers corresponding to the passed pubkeys and
+// returns error if any of the peers is not available or inacitive.
+func (s *server) getActivePeers(pubkeys []*btcec.PublicKey) ([]*peer, error) {
+	peers := make([]*peer, 0, len(pubkeys))
+
+	// First attempt to locate peers and fail if we're unable to do so.
+	s.mu.RLock()
+	for _, pubkey := range pubkeys {
+		pubKeyBytes := pubkey.SerializeCompressed()
+		peer, ok := s.peersByPub[string(pubKeyBytes)]
+		if !ok {
+			s.mu.RUnlock()
+			return nil, fmt.Errorf("peer %x is not online", pubKeyBytes)
+		}
+
+		peers = append(peers, peer)
+	}
+	s.mu.RUnlock()
+
+	// Wait until all peers are active or fail if any of them isn't.
+	for _, peer := range peers {
+		select {
+		case <-peer.activeSignal:
+		case <-peer.quit:
+			return nil, fmt.Errorf("peer %x disconnected", peer.pubKeyBytes)
+		case <-s.quit:
+			return nil, ErrServerShuttingDown
+		}
+	}
+
+	return nil, nil
+}
+
 // OpenChannel sends a request to the server to open a channel to the specified
 // peer identified by nodeKey with the passed channel funding parameters.
 //
@@ -3338,28 +3371,10 @@ func (s *server) OpenChannel(
 	req.updates = make(chan *lnrpc.OpenStatusUpdate, 2)
 	req.err = make(chan error, 1)
 
-	// First attempt to locate the target peer to open a channel with, if
-	// we're unable to locate the peer then this request will fail.
-	pubKeyBytes := req.targetPubkey.SerializeCompressed()
-	s.mu.RLock()
-	peer, ok := s.peersByPub[string(pubKeyBytes)]
-	if !ok {
-		s.mu.RUnlock()
-
-		req.err <- fmt.Errorf("peer %x is not online", pubKeyBytes)
-		return req.updates, req.err
-	}
-	s.mu.RUnlock()
-
-	// We'll wait until the peer is active before beginning the channel
-	// opening process.
-	select {
-	case <-peer.activeSignal:
-	case <-peer.quit:
-		req.err <- fmt.Errorf("peer %x disconnected", pubKeyBytes)
-		return req.updates, req.err
-	case <-s.quit:
-		req.err <- ErrServerShuttingDown
+	// Check if peer is available and active.
+	peers, err := s.getActivePeers([]*btcec.PublicKey{req.targetPubkey})
+	if err != nil {
+		req.err <- err
 		return req.updates, req.err
 	}
 
@@ -3379,7 +3394,7 @@ func (s *server) OpenChannel(
 	// manager. This allows the server to continue handling queries instead
 	// of blocking on this request which is exported as a synchronous
 	// request to the outside world.
-	go s.fundingMgr.initFundingWorkflow(peer, req)
+	go s.fundingMgr.initFundingWorkflow(peers[0], req)
 
 	return req.updates, req.err
 }
