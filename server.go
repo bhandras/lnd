@@ -3145,6 +3145,62 @@ func (s *server) removePeer(p *peer) {
 	s.peerNotifier.NotifyPeerOffline(pubKey)
 }
 
+type batchOpenChanReqItem struct {
+	targetPubkey *btcec.PublicKey
+
+	chainHash chainhash.Hash
+
+	localFundingAmt btcutil.Amount
+
+	pushAmt lnwire.MilliSatoshi
+
+	private bool
+
+	// minHtlcIn is the minimum incoming htlc that we accept.
+	minHtlcIn lnwire.MilliSatoshi
+
+	remoteCsvDelay uint16
+
+	// pendingChanID is not all zeroes (the default value), then this will
+	// be the pending channel ID used for the funding flow within the wire
+	// protocol.
+	pendingChanID [32]byte
+}
+
+type batchOpenChanReq struct {
+	items []batchOpenChanReqItem
+
+	subtractFees bool
+
+	fundingFeePerKw chainfee.SatPerKWeight
+
+	// minConfs indicates the minimum number of confirmations that each
+	// output selected to fund the channel should satisfy.
+	minConfs int32
+
+	// shutdownScript is an optional upfront shutdown script for the channel.
+	// This value is optional, so may be nil.
+	shutdownScript lnwire.DeliveryAddress
+
+	// chanFunder is an optional channel funder that allows the caller to
+	// control exactly how the channel funding is carried out. If not
+	// specified, then the default chanfunding.WalletAssembler will be
+	// used.
+	chanFunder chanfunding.Assembler
+
+	// pendingChanID is not all zeroes (the default value), then this will
+	// be the pending channel ID used for the funding flow within the wire
+	// protocol.
+	pendingChanID [32]byte
+
+	updates chan *batchOpenChanUpdate
+	err     chan error
+}
+
+type batchOpenChanUpdate struct {
+	// TODO(bhandras): add missing implementation.
+}
+
 // openChanReq is a message sent to the server in order to request the
 // initiation of a channel funding workflow to the peer with either the
 // specified relative peer ID, or a global lightning  ID.
