@@ -23,6 +23,7 @@ import (
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
+	"github.com/btcsuite/btcutil/psbt"
 	"github.com/go-errors/errors"
 	sphinx "github.com/lightningnetwork/lightning-onion"
 	"github.com/lightningnetwork/lnd/autopilot"
@@ -3412,6 +3413,109 @@ func (s *server) getActivePeers(pubkeys []*btcec.PublicKey) ([]*peer, error) {
 	}
 
 	return nil, nil
+}
+
+func (s *server) BatchOpenChannel(ctx context.Context,
+	batchReq *batchOpenChanReq) error {
+
+	var wg sync.WaitGroup
+	wg.Add(len(batchReq.items))
+
+	requests := make([]*openChanReq, len(batchReq.items))
+
+	waitForOpenStatusUpdate := func(req *openChanReq) (
+		*lnrpc.OpenStatusUpdate, error) {
+
+		select {
+		case err := <-req.err:
+			return nil, err
+		case statusUpdate := <-req.updates:
+			return statusUpdate, nil
+		case <-ctx.Done():
+			return nil, fmt.Errorf("aborted")
+		}
+	}
+
+	for i, item := range batchReq.items {
+		requests[i] = &openChanReq{
+			targetPubkey:    item.targetPubkey,
+			chainHash:       item.chainHash,
+			subtractFees:    batchReq.subtractFees,
+			localFundingAmt: item.localFundingAmt,
+			fundingFeePerKw: batchReq.fundingFeePerKw,
+			pushAmt:         item.pushAmt,
+			private:         item.private,
+			minHtlcIn:       item.minHtlcIn,
+			remoteCsvDelay:  item.remoteCsvDelay,
+			minConfs:        batchReq.minConfs,
+			shutdownScript:  batchReq.shutdownScript,
+			pendingChanID:   item.pendingChanID,
+		}
+
+		// TODO(bhandras): support base psbt?
+		// var packet *psbt.Packet
+
+		requests[i].chanFunder = chanfunding.NewPsbtAssembler(
+			item.localFundingAmt, nil, &s.cc.wallet.Cfg.NetParams)
+
+		s.OpenChannel(requests[i])
+	}
+
+	fundingAmunts := make([]btcutil.Amount, len(batchReq.items))
+	fundingAddresses := make([]string, len(batchReq.items))
+
+	for i, req := range requests {
+		// Wait for PsbtFund
+		statusUpdate, err := waitForOpenStatusUpdate(req)
+		if err != nil {
+			return err
+		}
+
+		switch update := statusUpdate.Update.(type) {
+		case *lnrpc.OpenStatusUpdate_PsbtFund:
+			fundingAmunts[i] = btcutil.Amount(update.PsbtFund.FundingAmount)
+			fundingAddresses[i] = update.PsbtFund.FundingAddress
+
+		default:
+			return fmt.Errorf("unexpected state update")
+		}
+	}
+
+	// Create and sign PSBT
+
+	for _, req := range requests {
+		statusUpdate, err := waitForOpenStatusUpdate(req)
+		if err != nil {
+			return err
+		}
+
+	ready:
+		for {
+			switch statusUpdate.Update.(type) {
+			case *lnrpc.OpenStatusUpdate_ChanPending:
+				continue
+
+			case *lnrpc.OpenStatusUpdate_ChanOpen:
+				break ready
+
+			default:
+				return fmt.Errorf("unexpected state change")
+			}
+		}
+
+		// TODO(bhandras): obtain psbt
+		// TODO(bhandras): optionally verify psbt?
+		// TODO(bhandras): finalize funding with signed psbt.
+		var psbt *psbt.Packet
+		var pid [32]byte
+		copy(pid[:], req.pendingChanID[:])
+		if err := s.cc.wallet.PsbtFundingFinalize(pid, psbt); err != nil {
+			return err
+		}
+
+	}
+
+	return nil
 }
 
 // OpenChannel sends a request to the server to open a channel to the specified
