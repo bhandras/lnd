@@ -1435,6 +1435,42 @@ func (r *rpcServer) DisconnectPeer(ctx context.Context,
 // extractOpenChannelMinConfs extracts the minimum number of confirmations from
 // the OpenChannelRequest that each output used to fund the channel's funding
 // transaction should satisfy.
+func openChannelMinConfs(minConfs int32, spendUnconfirmed bool) (int32, error) {
+	switch {
+	// Ensure that the MinConfs parameter is non-negative.
+	case minConfs < 0:
+		return 0, errors.New("minimum number of confirmations must " +
+			"be a non-negative number")
+
+	// The funding transaction should not be funded with unconfirmed outputs
+	// unless explicitly specified by SpendUnconfirmed. We do this to
+	// provide sane defaults to the OpenChannel RPC, as otherwise, if the
+	// MinConfs field isn't explicitly set by the caller, we'll use
+	// unconfirmed outputs without the caller being aware.
+	case minConfs == 0 && !spendUnconfirmed:
+		return 1, nil
+
+	// In the event that the caller set MinConfs > 0 and SpendUnconfirmed to
+	// true, we'll return an error to indicate the conflict.
+	case minConfs > 0 && spendUnconfirmed:
+		return 0, errors.New("SpendUnconfirmed set to true with " +
+			"MinConfs > 0")
+
+	// The funding transaction of the new channel to be created can be
+	// funded with unconfirmed outputs.
+	case spendUnconfirmed:
+		return 0, nil
+
+	// If none of the above cases matched, we'll return the value set
+	// explicitly by the caller.
+	default:
+		return minConfs, nil
+	}
+}
+
+// extractOpenChannelMinConfs extracts the minimum number of confirmations from
+// the OpenChannelRequest that each output used to fund the channel's funding
+// transaction should satisfy.
 func extractOpenChannelMinConfs(in *lnrpc.OpenChannelRequest) (int32, error) {
 	switch {
 	// Ensure that the MinConfs parameter is non-negative.
@@ -1745,6 +1781,124 @@ func (r *rpcServer) parseOpenChannelReq(in *lnrpc.OpenChannelRequest,
 		minConfs:        minConfs,
 		shutdownScript:  script,
 	}, nil
+}
+
+func (r *rpcServer) BatchOpenChannel(in *lnrpc.BatchOpenChannelRequest,
+	updateStream lnrpc.Lightning_BatchOpenChannelServer) error {
+
+	if err := r.canOpenChannel(); err != nil {
+		return err
+	}
+
+	batchReq := &batchOpenChanReq{}
+
+	for _, item := range in.Channels {
+		localFundingAmt := btcutil.Amount(item.LocalFundingAmount)
+		remoteInitialBalance := btcutil.Amount(item.PushSat)
+		minHtlcIn := lnwire.MilliSatoshi(item.MinHtlcMsat)
+		remoteCsvDelay := uint16(item.RemoteCsvDelay)
+
+		// Ensure that the initial balance of the remote party (if pushing
+		// satoshis) does not exceed the amount the local party has requested
+		// for funding.
+		//
+		// TODO(roasbeef): incorporate base fee?
+		if remoteInitialBalance >= localFundingAmt {
+			return fmt.Errorf("amount pushed to remote peer for " +
+				"initial state must be below the local funding amount")
+		}
+
+		// Ensure that the user doesn't exceed the current soft-limit for
+		// channel size. If the funding amount is above the soft-limit, then
+		// we'll reject the request.
+		if localFundingAmt > MaxFundingAmount {
+			return fmt.Errorf("funding amount is too large, the max "+
+				"channel size is: %v", MaxFundingAmount)
+		}
+
+		// Restrict the size of the channel we'll actually open. At a later
+		// level, we'll ensure that the output we create after accounting for
+		// fees that a dust output isn't created.
+		if localFundingAmt < minChanFundingSize {
+			return fmt.Errorf("channel is too small, the minimum "+
+				"channel size is: %v SAT", int64(minChanFundingSize))
+		}
+
+		var nodePubKey *btcec.PublicKey
+
+		// Parse the remote pubkey the NodePubkey field of the request. If it's
+		// not present, we'll fallback to the deprecated version that parses the
+		// key from a hex string if this is for REST for backwards compatibility.
+
+		// Parse the raw bytes of the node key into a pubkey object so we can
+		// easily manipulate it.
+		if len(item.NodePubkey) == 0 {
+			return fmt.Errorf("NodePubkey is not set")
+		}
+		nodePubKey, err := btcec.ParsePubKey(item.NodePubkey, btcec.S256())
+		if err != nil {
+			return err
+		}
+
+		// Making a channel to ourselves wouldn't be of any use, so we
+		// explicitly disallow them.
+		if nodePubKey.IsEqual(r.server.identityECDH.PubKey()) {
+			return fmt.Errorf("cannot open channel to self")
+		}
+
+		batchReqItem := batchOpenChanReqItem{
+			targetPubkey:    nodePubKey,
+			chainHash:       *activeNetParams.GenesisHash, // TODO: move out?
+			localFundingAmt: localFundingAmt,
+			pushAmt:         lnwire.NewMSatFromSatoshis(remoteInitialBalance),
+			private:         item.Private,
+			minHtlcIn:       minHtlcIn,
+			remoteCsvDelay:  remoteCsvDelay,
+		}
+
+		batchReq.items = append(batchReq.items, batchReqItem)
+	}
+
+	// Then, we'll extract the minimum number of confirmations that each
+	// output we use to fund the channel's funding transaction should
+	// satisfy.
+	minConfs, err := openChannelMinConfs(
+		in.MinConfs, in.SpendUnconfirmed,
+	)
+	if err != nil {
+		return err
+	}
+
+	// Based on the passed fee related parameters, we'll determine an
+	// appropriate fee rate for the funding transaction.
+	satPerKw := chainfee.SatPerKVByte(in.SatPerByte * 1000).FeePerKWeight()
+	feeRate, err := sweep.DetermineFeePerKw(
+		r.server.cc.feeEstimator, sweep.FeePreference{
+			ConfTarget: uint32(in.TargetConf),
+			FeeRate:    satPerKw,
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	rpcsLog.Debugf("[batchopenchannel]: using fee of %v sat/kw for funding tx",
+		int64(feeRate))
+
+	script, err := parseUpfrontShutdownAddress(in.CloseAddress)
+	if err != nil {
+		return fmt.Errorf("error parsing upfront shutdown: %v", err)
+	}
+
+	batchReq.minConfs = minConfs
+	batchReq.fundingFeePerKw = feeRate
+	batchReq.shutdownScript = script
+
+	// TODO(bhandras): context
+	ctx := context.Background()
+
+	r.server.BatchOpenChannel(ctx, batchReq)
+	return nil
 }
 
 // OpenChannel attempts to open a singly funded channel specified in the
