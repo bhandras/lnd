@@ -1,4 +1,4 @@
-DEV_TAGS = dev
+DEV_TAGS = dev chainrpc walletrpc signrpc invoicesrpc autopilotrpc watchtowerrpc
 LOG_TAGS =
 TEST_FLAGS =
 COVER_PKG = $$(go list -deps ./... | grep '$(PKG)' | grep -v lnrpc)
@@ -61,6 +61,6 @@ backend = btcd
 endif
 
 # Construct the integration test command with the added build flags.
-ITEST_TAGS := $(DEV_TAGS) rpctest chainrpc walletrpc signrpc invoicesrpc autopilotrpc watchtowerrpc $(backend)
+ITEST_TAGS := $(DEV_TAGS) rpctest $(backend)
 
 ITEST := rm lntest/itest/*.log; date; $(GOTEST) -v ./lntest/itest -tags="$(ITEST_TAGS)" $(TEST_FLAGS) -logoutput -goroutinedump
