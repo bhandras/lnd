@@ -3412,7 +3412,7 @@ func (s *server) getActivePeers(pubkeys []*btcec.PublicKey) ([]*peer, error) {
 		}
 	}
 
-	return nil, nil
+	return peers, nil
 }
 
 func (s *server) BatchOpenChannel(ctx context.Context,
@@ -3461,8 +3461,10 @@ func (s *server) BatchOpenChannel(ctx context.Context,
 		s.OpenChannel(requests[i])
 	}
 
+	srvrLog.Infof("%%%% BEFORE open status update")
 	fundingAmunts := make([]btcutil.Amount, len(batchReq.items))
 	fundingAddresses := make([]string, len(batchReq.items))
+	psbts := make([][]byte, len(batchReq.items))
 
 	for i, req := range requests {
 		// Wait for PsbtFund
@@ -3473,8 +3475,10 @@ func (s *server) BatchOpenChannel(ctx context.Context,
 
 		switch update := statusUpdate.Update.(type) {
 		case *lnrpc.OpenStatusUpdate_PsbtFund:
+			srvrLog.Infof("%%%% open status update: %v", update)
 			fundingAmunts[i] = btcutil.Amount(update.PsbtFund.FundingAmount)
 			fundingAddresses[i] = update.PsbtFund.FundingAddress
+			psbts[i] = update.PsbtFund.Psbt
 
 		default:
 			return fmt.Errorf("unexpected state update")
@@ -3482,7 +3486,16 @@ func (s *server) BatchOpenChannel(ctx context.Context,
 	}
 
 	// Create and sign PSBT
+	/*
+		for _, psbtBytes := range psbts {
+			packet, err := psbt.NewFromRawBytes(bytes.NewReader(psbtBytes), false)
+			if err != nil {
+				return err
+			}
+		}
+	*/
 
+	srvrLog.Infof("%%%% AFTER open status update")
 	for _, req := range requests {
 		statusUpdate, err := waitForOpenStatusUpdate(req)
 		if err != nil {
@@ -3504,7 +3517,6 @@ func (s *server) BatchOpenChannel(ctx context.Context,
 		}
 
 		// TODO(bhandras): obtain psbt
-		// TODO(bhandras): optionally verify psbt?
 		// TODO(bhandras): finalize funding with signed psbt.
 		var psbt *psbt.Packet
 		var pid [32]byte
