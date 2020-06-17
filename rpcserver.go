@@ -239,6 +239,13 @@ func mainRPCServerPermissions() map[string][]bakery.Op {
 			Entity: "offchain",
 			Action: "write",
 		}},
+		"/lnrpc.Lightning/BatchOpenChannel": {{
+			Entity: "onchain",
+			Action: "write",
+		}, {
+			Entity: "offchain",
+			Action: "write",
+		}},
 		"/lnrpc.Lightning/OpenChannelSync": {{
 			Entity: "onchain",
 			Action: "write",
