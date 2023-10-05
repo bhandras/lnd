@@ -2,6 +2,7 @@ package htlcswitch
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
@@ -483,7 +484,9 @@ func TestChannelLinkSingleHopPayment(t *testing.T) {
 
 	// Check that alice invoice was settled and bandwidth of HTLC
 	// links was changed.
-	invoice, err := receiver.registry.LookupInvoice(rhash)
+	invoice, err := receiver.registry.LookupInvoice(
+		context.Background(), rhash,
+	)
 	require.NoError(t, err, "unable to get invoice")
 	if invoice.State != invpkg.ContractSettled {
 		t.Fatal("alice invoice wasn't settled")
@@ -601,7 +604,9 @@ func testChannelLinkMultiHopPayment(t *testing.T,
 
 	// Check that Carol invoice was settled and bandwidth of HTLC
 	// links were changed.
-	invoice, err := receiver.registry.LookupInvoice(rhash)
+	invoice, err := receiver.registry.LookupInvoice(
+		context.Background(), rhash,
+	)
 	require.NoError(t, err, "unable to get invoice")
 	if invoice.State != invpkg.ContractSettled {
 		t.Fatal("carol invoice haven't been settled")
@@ -710,7 +715,9 @@ func TestChannelLinkCancelFullCommitment(t *testing.T) {
 		// invoice registry at this point, so we poll until we are able
 		// to settle.
 		err = wait.NoError(func() error {
-			return n.bobServer.registry.SettleHodlInvoice(preimage)
+			return n.bobServer.registry.SettleHodlInvoice(
+				context.Background(), preimage,
+			)
 		}, time.Minute)
 		if err != nil {
 			t.Fatal(err)
@@ -1177,7 +1184,9 @@ func TestUpdateForwardingPolicy(t *testing.T) {
 
 	// Carol's invoice should now be shown as settled as the payment
 	// succeeded.
-	invoice, err := n.carolServer.registry.LookupInvoice(payResp)
+	invoice, err := n.carolServer.registry.LookupInvoice(
+		context.Background(), payResp,
+	)
 	require.NoError(t, err, "unable to get invoice")
 	if invoice.State != invpkg.ContractSettled {
 		t.Fatal("carol invoice haven't been settled")
@@ -1331,7 +1340,9 @@ func TestChannelLinkMultiHopInsufficientPayment(t *testing.T) {
 
 	// Check that alice invoice wasn't settled and bandwidth of htlc
 	// links hasn't been changed.
-	invoice, err := receiver.registry.LookupInvoice(rhash)
+	invoice, err := receiver.registry.LookupInvoice(
+		context.Background(), rhash,
+	)
 	require.NoError(t, err, "unable to get invoice")
 	if invoice.State == invpkg.ContractSettled {
 		t.Fatal("carol invoice have been settled")
@@ -1509,7 +1520,9 @@ func TestChannelLinkMultiHopUnknownNextHop(t *testing.T) {
 
 	// Check that alice invoice wasn't settled and bandwidth of htlc
 	// links hasn't been changed.
-	invoice, err := receiver.registry.LookupInvoice(rhash)
+	invoice, err := receiver.registry.LookupInvoice(
+		context.Background(), rhash,
+	)
 	require.NoError(t, err, "unable to get invoice")
 	if invoice.State == invpkg.ContractSettled {
 		t.Fatal("carol invoice have been settled")
@@ -1617,7 +1630,9 @@ func TestChannelLinkMultiHopDecodeError(t *testing.T) {
 
 	// Check that alice invoice wasn't settled and bandwidth of htlc
 	// links hasn't been changed.
-	invoice, err := receiver.registry.LookupInvoice(rhash)
+	invoice, err := receiver.registry.LookupInvoice(
+		context.Background(), rhash,
+	)
 	require.NoError(t, err, "unable to get invoice")
 	if invoice.State == invpkg.ContractSettled {
 		t.Fatal("carol invoice have been settled")
@@ -3625,7 +3640,9 @@ func TestChannelRetransmission(t *testing.T) {
 
 			// Check that alice invoice wasn't settled and
 			// bandwidth of htlc links hasn't been changed.
-			invoice, err = receiver.registry.LookupInvoice(rhash)
+			invoice, err = receiver.registry.LookupInvoice(
+				context.Background(), rhash,
+			)
 			if err != nil {
 				err = fmt.Errorf(
 					"unable to get invoice: %w", err,
@@ -4186,7 +4203,9 @@ func TestChannelLinkAcceptOverpay(t *testing.T) {
 
 	// Even though we sent 2x what was asked for, Carol should still have
 	// accepted the payment and marked it as settled.
-	invoice, err := receiver.registry.LookupInvoice(rhash)
+	invoice, err := receiver.registry.LookupInvoice(
+		context.Background(), rhash,
+	)
 	require.NoError(t, err, "unable to get invoice")
 	if invoice.State != invpkg.ContractSettled {
 		t.Fatal("carol invoice haven't been settled")
@@ -5847,7 +5866,7 @@ func TestChannelLinkCanceledInvoice(t *testing.T) {
 
 	// Cancel the invoice at bob's end.
 	hash := invoice.Terms.PaymentPreimage.Hash()
-	err = n.bobServer.registry.CancelInvoice(hash)
+	err = n.bobServer.registry.CancelInvoice(context.Background(), hash)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5964,7 +5983,9 @@ func TestChannelLinkHoldInvoiceSettle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = ctx.n.bobServer.registry.SettleHodlInvoice(ctx.preimage)
+	err = ctx.n.bobServer.registry.SettleHodlInvoice(
+		context.Background(), ctx.preimage,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6008,7 +6029,9 @@ func TestChannelLinkHoldInvoiceCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = ctx.n.bobServer.registry.CancelInvoice(ctx.hash)
+	err = ctx.n.bobServer.registry.CancelInvoice(
+		context.Background(), ctx.hash,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6097,7 +6120,7 @@ func TestChannelLinkHoldInvoiceRestart(t *testing.T) {
 	<-registry.settleChan
 
 	// Settle the invoice with the preimage.
-	err = registry.SettleHodlInvoice(*preimage)
+	err = registry.SettleHodlInvoice(context.Background(), *preimage)
 	require.NoError(t, err, "settle hodl invoice")
 
 	// Expect alice to send a settle and commitsig message to bob.
@@ -6280,8 +6303,10 @@ func TestChannelLinkRevocationWindowHodl(t *testing.T) {
 		t.Fatal("exit hop notification not received")
 	}
 
+	ctxb := context.Background()
+
 	// Settle invoice 1 with the preimage.
-	err = registry.SettleHodlInvoice(*preimage1)
+	err = registry.SettleHodlInvoice(ctxb, *preimage1)
 	require.NoError(t, err, "settle hodl invoice")
 
 	// Expect alice to send a settle and commitsig message to bob. Bob does
@@ -6290,7 +6315,7 @@ func TestChannelLinkRevocationWindowHodl(t *testing.T) {
 	ctx.receiveCommitSigAliceToBob(1)
 
 	// Settle invoice 2 with the preimage.
-	err = registry.SettleHodlInvoice(*preimage2)
+	err = registry.SettleHodlInvoice(ctxb, *preimage2)
 	require.NoError(t, err, "settle hodl invoice")
 
 	// Expect alice to send a settle for htlc 2.
