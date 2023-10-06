@@ -64,11 +64,16 @@
 ## BOLT Spec Updates
 ## Testing
 ## Database
+
+* [Extend InvoiceDB methods](https://github.com/lightningnetwork/lnd/pull/) 
+  with an additional context argument in preparation of SQL implementation.
+
 ## Code Health
 ## Tooling and Documentation
 
 # Contributors (Alphabetical Order)
 
+* Andras Banki-Horvath
 * Carla Kirk-Cohen
 * Elle Mouton
 * Yong Yu
