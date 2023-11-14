@@ -193,7 +193,7 @@ func addHTLCs(invoice *Invoice, hash *lntypes.Hash,
 	// change, which depends on having an accurate view of the accepted
 	// HTLCs.
 	if update.State != nil {
-		newState, err := updateInvoiceState(
+		newState, preimage, err := getUpdatedInvoiceState(
 			invoice, hash, *update.State,
 		)
 		if err != nil {
@@ -207,6 +207,7 @@ func addHTLCs(invoice *Invoice, hash *lntypes.Hash,
 		// transition to the cancelled state regardless.
 		if !invoiceIsAMP || *newState == ContractCanceled {
 			invoice.State = *newState
+			invoice.Terms.PaymentPreimage = preimage
 		}
 	}
 
@@ -356,8 +357,9 @@ func settleHodlInvoice(invoice *Invoice, hash *lntypes.Hash,
 			"preimage is nil")
 	}
 
-	// TODO(positiveblue): create a invoice.CanSettleHodlInvoice func.
-	newState, err := updateInvoiceState(invoice, hash, *update)
+	newState, preimage, err := getUpdatedInvoiceState(
+		invoice, hash, *update,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -368,6 +370,7 @@ func settleHodlInvoice(invoice *Invoice, hash *lntypes.Hash,
 	}
 
 	invoice.State = ContractSettled
+	invoice.Terms.PaymentPreimage = preimage
 
 	// TODO(positiveblue): this logic can be further simplified.
 	var amtPaid lnwire.MilliSatoshi
@@ -419,7 +422,7 @@ func cancelInvoice(invoice *Invoice, hash *lntypes.Hash,
 		setID = update.SetID
 	}
 
-	newState, err := updateInvoiceState(invoice, hash, *update)
+	newState, _, err := getUpdatedInvoiceState(invoice, hash, *update)
 	if err != nil {
 		return nil, err
 	}
@@ -452,15 +455,16 @@ func cancelInvoice(invoice *Invoice, hash *lntypes.Hash,
 	}, nil
 }
 
-// updateInvoiceState validates and processes an invoice state update. The new
-// state to transition to is returned, so the caller is able to select exactly
-// how the invoice state is updated.
-func updateInvoiceState(invoice *Invoice, hash *lntypes.Hash,
-	update InvoiceStateUpdateDesc) (*ContractState, error) {
+// getUpdatedInvoiceState validates and processes an invoice state update. The
+// new state to transition to is returned, so the caller is able to select
+// exactly how the invoice state is updated.
+func getUpdatedInvoiceState(invoice *Invoice, hash *lntypes.Hash,
+	update InvoiceStateUpdateDesc) (*ContractState, *lntypes.Preimage,
+	error) {
 
 	// Returning to open is never allowed from any state.
 	if update.NewState == ContractOpen {
-		return nil, ErrInvoiceCannotOpen
+		return nil, nil, ErrInvoiceCannotOpen
 	}
 
 	switch invoice.State {
@@ -470,7 +474,7 @@ func updateInvoiceState(invoice *Invoice, hash *lntypes.Hash,
 	// same checks that we apply to open invoices.
 	case ContractAccepted:
 		if update.NewState == ContractAccepted {
-			return nil, ErrInvoiceCannotAccept
+			return nil, nil, ErrInvoiceCannotAccept
 		}
 
 		fallthrough
@@ -480,14 +484,14 @@ func updateInvoiceState(invoice *Invoice, hash *lntypes.Hash,
 	// where we ensure the preimage is valid.
 	case ContractOpen:
 		if update.NewState == ContractCanceled {
-			return &update.NewState, nil
+			return &update.NewState, nil, nil
 		}
 
 		// Sanity check that the user isn't trying to settle or accept a
 		// non-existent HTLC set.
 		set := invoice.HTLCSet(update.SetID, HtlcStateAccepted)
 		if len(set) == 0 {
-			return nil, ErrEmptyHTLCSet
+			return nil, nil, ErrEmptyHTLCSet
 		}
 
 		// For AMP invoices, there are no invoice-level preimage checks.
@@ -495,25 +499,27 @@ func updateInvoiceState(invoice *Invoice, hash *lntypes.Hash,
 		// settle an AMP invoice with a preimage.
 		if update.SetID != nil {
 			if update.Preimage != nil {
-				return nil, errors.New("AMP set cannot have " +
-					"preimage")
+				return nil, nil, errors.New("AMP set cannot " +
+					"have preimage")
 			}
 
-			return &update.NewState, nil
+			return &update.NewState, nil, nil
 		}
+
+		var preimage *lntypes.Preimage
 
 		switch {
 		// If an invoice-level preimage was supplied, but the InvoiceRef
 		// doesn't specify a hash (e.g. AMP invoices) we fail.
 		case update.Preimage != nil && hash == nil:
-			return nil, ErrUnexpectedInvoicePreimage
+			return nil, nil, ErrUnexpectedInvoicePreimage
 
 		// Validate the supplied preimage for non-AMP invoices.
 		case update.Preimage != nil:
 			if update.Preimage.Hash() != *hash {
-				return nil, ErrInvoicePreimageMismatch
+				return nil, nil, ErrInvoicePreimageMismatch
 			}
-			invoice.Terms.PaymentPreimage = update.Preimage
+			preimage = update.Preimage
 
 		// Permit non-AMP invoices to be accepted without knowing the
 		// preimage. When trying to settle we'll have to pass through
@@ -525,21 +531,21 @@ func updateInvoiceState(invoice *Invoice, hash *lntypes.Hash,
 		case update.NewState == ContractSettled &&
 			invoice.Terms.PaymentPreimage == nil:
 
-			return nil, errors.New("unknown preimage")
+			return nil, nil, errors.New("unknown preimage")
 		}
 
-		return &update.NewState, nil
+		return &update.NewState, preimage, nil
 
 	// Once settled, we are in a terminal state.
 	case ContractSettled:
-		return nil, ErrInvoiceAlreadySettled
+		return nil, nil, ErrInvoiceAlreadySettled
 
 	// Once canceled, we are in a terminal state.
 	case ContractCanceled:
-		return nil, ErrInvoiceAlreadyCanceled
+		return nil, nil, ErrInvoiceAlreadyCanceled
 
 	default:
-		return nil, errors.New("unknown state transition")
+		return nil, nil, errors.New("unknown state transition")
 	}
 }
 
