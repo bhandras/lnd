@@ -115,10 +115,13 @@ func cancelHTLCs(invoice *Invoice, updateTime time.Time,
 			return nil, fmt.Errorf("cancel of non-existent htlc")
 		}
 
-		err := cancelSingleHtlc(updateTime, htlc, invoice.State)
+		err := canCancelSingleHtlc(htlc, invoice.State)
 		if err != nil {
 			return nil, err
 		}
+
+		htlc.State = HtlcStateCanceled
+		htlc.ResolveTime = updateTime
 
 		// Tally this into the set of HTLCs that need to be updated on
 		// disk, but once again, only if this is an AMP invoice.
@@ -629,15 +632,13 @@ func cancelHtlcsAmp(invoice *Invoice,
 	}
 }
 
-// cancelSingleHtlc validates cancellation of a single htlc and update its
-// state.
-func cancelSingleHtlc(resolveTime time.Time, htlc *InvoiceHTLC,
-	invState ContractState) error {
-
+// canCancelSingleHtlc validates cancellation of a single HTLC. If nil is
+// returned, then the HTLC can be cancelled.
+func canCancelSingleHtlc(htlc *InvoiceHTLC, invoiceState ContractState) error {
 	// It is only possible to cancel individual htlcs on an open invoice.
-	if invState != ContractOpen {
+	if invoiceState != ContractOpen {
 		return fmt.Errorf("htlc canceled on invoice in "+
-			"state %v", invState)
+			"state %v", invoiceState)
 	}
 
 	// It is only possible if the htlc is still pending.
@@ -645,9 +646,6 @@ func cancelSingleHtlc(resolveTime time.Time, htlc *InvoiceHTLC,
 		return fmt.Errorf("htlc canceled in state %v",
 			htlc.State)
 	}
-
-	htlc.State = HtlcStateCanceled
-	htlc.ResolveTime = resolveTime
 
 	return nil
 }
