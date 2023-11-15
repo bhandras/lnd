@@ -164,45 +164,30 @@ type InvoiceSlice struct {
 // HTLCs in a circuit.
 type CircuitKey = models.CircuitKey
 
-// InvoiceUpdaterContext is the context that's passed to the methods of the
-// InvoiceUpdater interface. It contains all the information needed to update
-// the invoice in the database.
-type InvoiceUpdaterContext struct {
-	// invoice holds the updated invoice. It is always set regardless
-	// of the type of update.
-	Invoice *Invoice
-
-	// updateTime is the timestamp used for the update.
-	UpdateTime time.Time
-
-	// settledSetIDs holds the set of set IDs that were settled as part of
-	// this update. This is only set for StoreAddHtlcsUpdate.
-	SettledSetIDs map[SetID]struct{}
-
-	// ampHtlcsUpdate holds the set of AMP HTLCs that were added or
-	// cancelled as part of this update. This is only set for
-	// StoreAddHtlcsUpdate and StoreCancelHtlcsUpdate.
-	AMPHTLCsUpdate map[SetID]map[models.CircuitKey]*InvoiceHTLC
-}
-
 // InvoiceUpdater is an interface to abstract away the details of updating an
 // invoice in the database. The methods of this interface are called when the
 // in-memory update of an invoice is complete, and the database needs to be
 // updated.
 type InvoiceUpdater interface {
-	// StoreCancelHtlcsUpdate updates the invoice in the database after
-	// cancelling a set of HTLCs.
-	StoreCancelHtlcsUpdate(InvoiceUpdaterContext) error
+	// TODO(bhandras): add theses methods to the interface.
 
-	// StoreAddHtlcsUpdate updates the invoice in the database after
-	// adding a set of HTLCs.
-	StoreAddHtlcsUpdate(InvoiceUpdaterContext) error
+	//UpdateInvoiceState(newState ContractState) error
 
-	// StoreSettleHodlInvoiceUpdate updates the invoice in the database
-	// after settling a hodl invoice.
-	StoreSettleHodlInvoiceUpdate(InvoiceUpdaterContext) error
+	//ResolveHtlc(circuitKey CircuitKey, state HtlcState,
+	//	resolveTime time.Time) error
 
-	// StoreCancelInvoiceUpdate updates the invoice in the database after
-	// cancelling an invoice.
-	StoreCancelInvoiceUpdate(InvoiceUpdaterContext) error
+	//AddAmpHtlcPreimage(setID [32]byte, circuitKey CircuitKey,
+	//	preimage lntypes.Preimage) error
+
+	//UpdteInvoiceAmtPaid(amtPaid lnwire.MilliSatoshi) error
+
+	//UpdateAmpState(setID [32]byte, newState InvoiceStateAMP) error
+
+	AcceptHtlcAmp(setID [32]byte, circuitKey CircuitKey) error
+
+	SettleHtlcAmp(setID [32]byte, circuitKey CircuitKey) error
+
+	CancelHtlcAmp(setID [32]byte, circuitKey CircuitKey) error
+
+	Commit(updateType UpdateType) error
 }

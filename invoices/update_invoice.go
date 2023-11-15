@@ -36,65 +36,41 @@ func UpdateInvoice(hash *lntypes.Hash, invoice *Invoice, updateTime time.Time,
 
 	switch update.UpdateType {
 	case CancelHTLCsUpdate:
-		updateCtx, err := cancelHTLCs(invoice, updateTime, update)
+		err := cancelHTLCs(invoice, updateTime, update, updater)
 		if err != nil {
 			return nil, err
 		}
-
-		err = updater.StoreCancelHtlcsUpdate(*updateCtx)
-		if err != nil {
-			return nil, err
-		}
-
-		return updateCtx.Invoice, nil
 
 	case AddHTLCsUpdate:
-		updateCtx, err := addHTLCs(invoice, hash, updateTime, update)
+		err := addHTLCs(invoice, hash, updateTime, update, updater)
 		if err != nil {
 			return nil, err
 		}
-
-		err = updater.StoreAddHtlcsUpdate(*updateCtx)
-		if err != nil {
-			return nil, err
-		}
-
-		return updateCtx.Invoice, nil
 
 	case SettleHodlInvoiceUpdate:
-		updateCtx, err := settleHodlInvoice(
+		err := settleHodlInvoice(
 			invoice, hash, updateTime, update.State,
 		)
 		if err != nil {
 			return nil, err
 		}
-
-		err = updater.StoreSettleHodlInvoiceUpdate(*updateCtx)
-		if err != nil {
-			return nil, err
-		}
-
-		return updateCtx.Invoice, nil
 
 	case CancelInvoiceUpdate:
-		updateCtx, err := cancelInvoice(
-			invoice, hash, updateTime, update.State,
-		)
+		err := cancelInvoice(invoice, hash, updateTime, update.State)
 		if err != nil {
 			return nil, err
 		}
-
-		err = updater.StoreCancelInvoiceUpdate(*updateCtx)
-		if err != nil {
-			return nil, err
-		}
-
-		return updateCtx.Invoice, nil
 
 	default:
 		return nil, fmt.Errorf("unknown update type: %s",
 			update.UpdateType)
 	}
+
+	if err := updater.Commit(update.UpdateType); err != nil {
+		return nil, err
+	}
+
+	return invoice, nil
 }
 
 // cancelHTLCs tries to cancel the htlcs in the given InvoiceUpdateDesc.
@@ -102,22 +78,19 @@ func UpdateInvoice(hash *lntypes.Hash, invoice *Invoice, updateTime time.Time,
 // NOTE: cancelHTLCs updates will only use the `CancelHtlcs` field in the
 // InvoiceUpdateDesc.
 func cancelHTLCs(invoice *Invoice, updateTime time.Time,
-	update *InvoiceUpdateDesc) (*InvoiceUpdaterContext, error) {
-
-	// Process add actions from update descriptor.
-	htlcsAmpUpdate := make(map[SetID]map[models.CircuitKey]*InvoiceHTLC)
+	update *InvoiceUpdateDesc, updater InvoiceUpdater) error {
 
 	for key := range update.CancelHtlcs {
 		htlc, exists := invoice.Htlcs[key]
 		// Verify that we don't get an action for htlcs that are not
 		// present on the invoice.
 		if !exists {
-			return nil, fmt.Errorf("cancel of non-existent htlc")
+			return fmt.Errorf("cancel of non-existent htlc")
 		}
 
 		err := canCancelSingleHtlc(htlc, invoice.State)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		htlc.State = HtlcStateCanceled
@@ -126,21 +99,19 @@ func cancelHTLCs(invoice *Invoice, updateTime time.Time,
 		// Tally this into the set of HTLCs that need to be updated on
 		// disk, but once again, only if this is an AMP invoice.
 		if invoice.IsAMP() {
-			cancelHtlcsAmp(invoice, htlcsAmpUpdate, htlc, key)
+			err := cancelHtlcsAmp(invoice, key, htlc, updater)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
-	return &InvoiceUpdaterContext{
-		Invoice:        invoice,
-		UpdateTime:     updateTime,
-		AMPHTLCsUpdate: htlcsAmpUpdate,
-	}, nil
+	return nil
 }
 
 // addHTLCs tries to add the htlcs in the given InvoiceUpdateDesc.
-func addHTLCs(invoice *Invoice, hash *lntypes.Hash,
-	updateTime time.Time, update *InvoiceUpdateDesc) (
-	*InvoiceUpdaterContext, error) {
+func addHTLCs(invoice *Invoice, hash *lntypes.Hash, updateTime time.Time,
+	update *InvoiceUpdateDesc, updater InvoiceUpdater) error {
 
 	var setID *[32]byte
 	invoiceIsAMP := invoice.IsAMP()
@@ -148,17 +119,15 @@ func addHTLCs(invoice *Invoice, hash *lntypes.Hash,
 		setID = update.State.SetID
 	}
 
-	// Process add actions from update descriptor.
-	htlcsAmpUpdate := make(map[SetID]map[models.CircuitKey]*InvoiceHTLC) //nolint:lll
 	for key, htlcUpdate := range update.AddHtlcs {
 		if _, exists := invoice.Htlcs[key]; exists {
-			return nil, fmt.Errorf("duplicate add of htlc %v", key)
+			return fmt.Errorf("duplicate add of htlc %v", key)
 		}
 
 		// Force caller to supply htlc without custom records in a
 		// consistent way.
 		if htlcUpdate.CustomRecords == nil {
-			return nil, errors.New("nil custom records map")
+			return errors.New("nil custom records map")
 		}
 
 		htlc := &InvoiceHTLC{
@@ -178,15 +147,18 @@ func addHTLCs(invoice *Invoice, hash *lntypes.Hash,
 		// below, but only if this is an AMP invoice.
 		if invoiceIsAMP {
 			if htlcUpdate.AMP == nil {
-				return nil, fmt.Errorf("unable to add htlc "+
+				return fmt.Errorf("unable to add htlc "+
 					"without AMP data to AMP invoice(%v)",
 					invoice.AddIndex)
 			}
 
-			updateHtlcsAmp(
-				invoice, htlcsAmpUpdate, htlc,
-				htlcUpdate.AMP.Record.SetID(), key,
+			err := acceptHtlcsAmp(
+				invoice, htlcUpdate.AMP.Record.SetID(), key,
+				htlc, updater,
 			)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -200,7 +172,7 @@ func addHTLCs(invoice *Invoice, hash *lntypes.Hash,
 			invoice, hash, *update.State,
 		)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		// If this isn't an AMP invoice, then we'll go ahead and update
@@ -224,10 +196,8 @@ func addHTLCs(invoice *Invoice, hash *lntypes.Hash,
 	// With any invoice level state transitions recorded, we'll now
 	// finalize the process by updating the state transitions for
 	// individual HTLCs
-	var (
-		settledSetIDs = make(map[SetID]struct{})
-		amtPaid       lnwire.MilliSatoshi
-	)
+	var amtPaid lnwire.MilliSatoshi
+
 	for key, htlc := range invoice.Htlcs {
 		// Set the HTLC preimage for any AMP HTLCs.
 		if setID != nil && update.State != nil {
@@ -242,7 +212,7 @@ func addHTLCs(invoice *Invoice, hash *lntypes.Hash,
 			// preimage.  Ignore the case where the preimage is
 			// identical.
 			case ok && *htlc.AMP.Preimage != preimage:
-				return nil, ErrHTLCPreimageAlreadyExists
+				return ErrHTLCPreimageAlreadyExists
 			}
 		}
 
@@ -263,7 +233,7 @@ func addHTLCs(invoice *Invoice, hash *lntypes.Hash,
 			htlc, htlcContextState, setID,
 		)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		if htlcStateChanged {
@@ -277,10 +247,7 @@ func addHTLCs(invoice *Invoice, hash *lntypes.Hash,
 		// is an AMP invoice, then we'll need to update some additional
 		// meta data state.
 		if htlcSettled && invoiceIsAMP {
-			settleHtlcsAmp(
-				invoice, settledSetIDs, htlcsAmpUpdate, htlc,
-				key,
-			)
+			settleHtlcsAmp(invoice, key, htlc, updater)
 		}
 
 		accepted := htlc.State == HtlcStateAccepted
@@ -325,23 +292,17 @@ func addHTLCs(invoice *Invoice, hash *lntypes.Hash,
 		invoice.AmtPaid += amtPaid
 	}
 
-	return &InvoiceUpdaterContext{
-		Invoice:        invoice,
-		UpdateTime:     updateTime,
-		SettledSetIDs:  settledSetIDs,
-		AMPHTLCsUpdate: htlcsAmpUpdate,
-	}, nil
+	return nil
 }
 
 // settleHodlInvoice marks a hodl invoice as settled.
 //
 // NOTE: Currently it is not possible to have HODL AMP invoices.
 func settleHodlInvoice(invoice *Invoice, hash *lntypes.Hash,
-	updateTime time.Time, update *InvoiceStateUpdateDesc) (
-	*InvoiceUpdaterContext, error) {
+	updateTime time.Time, update *InvoiceStateUpdateDesc) error {
 
 	if !invoice.HodlInvoice {
-		return nil, fmt.Errorf("unable to settle hodl invoice: %v is "+
+		return fmt.Errorf("unable to settle hodl invoice: %v is "+
 			"not a hodl invoice", invoice.AddIndex)
 	}
 
@@ -352,11 +313,11 @@ func settleHodlInvoice(invoice *Invoice, hash *lntypes.Hash,
 		fallthrough
 
 	case update.NewState != ContractSettled:
-		return nil, fmt.Errorf("unable to settle hodl invoice: "+
+		return fmt.Errorf("unable to settle hodl invoice: "+
 			"not valid InvoiceUpdateDesc.State: %v", update)
 
 	case update.Preimage == nil:
-		return nil, fmt.Errorf("unable to settle hodl invoice: " +
+		return fmt.Errorf("unable to settle hodl invoice: " +
 			"preimage is nil")
 	}
 
@@ -364,11 +325,11 @@ func settleHodlInvoice(invoice *Invoice, hash *lntypes.Hash,
 		invoice, hash, *update,
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	if newState == nil || *newState != ContractSettled {
-		return nil, fmt.Errorf("unable to settle hodl invoice: "+
+		return fmt.Errorf("unable to settle hodl invoice: "+
 			"new computed state is not settled: %s", newState)
 	}
 
@@ -382,7 +343,7 @@ func settleHodlInvoice(invoice *Invoice, hash *lntypes.Hash,
 			htlc, ContractSettled, nil,
 		)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		if settled {
@@ -394,24 +355,20 @@ func settleHodlInvoice(invoice *Invoice, hash *lntypes.Hash,
 
 	invoice.AmtPaid = amtPaid
 
-	return &InvoiceUpdaterContext{
-		Invoice:    invoice,
-		UpdateTime: updateTime,
-	}, nil
+	return nil
 }
 
 // cancelInvoice attempts to cancel the given invoice. That includes changing
 // the invoice state and the state of any relevant HTLC.
 func cancelInvoice(invoice *Invoice, hash *lntypes.Hash,
-	updateTime time.Time, update *InvoiceStateUpdateDesc) (
-	*InvoiceUpdaterContext, error) {
+	updateTime time.Time, update *InvoiceStateUpdateDesc) error {
 
 	switch {
 	case update == nil:
 		fallthrough
 
 	case update.NewState != ContractCanceled:
-		return nil, fmt.Errorf("unable to cancel invoice: "+
+		return fmt.Errorf("unable to cancel invoice: "+
 			"InvoiceUpdateDesc.State not valid: %v", update)
 	}
 
@@ -427,11 +384,11 @@ func cancelInvoice(invoice *Invoice, hash *lntypes.Hash,
 
 	newState, _, err := getUpdatedInvoiceState(invoice, hash, *update)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	if newState == nil || *newState != ContractCanceled {
-		return nil, fmt.Errorf("unable to cancel invoice(%v): new "+
+		return fmt.Errorf("unable to cancel invoice(%v): new "+
 			"computed state is not canceled: %s", invoice.AddIndex,
 			newState)
 	}
@@ -443,7 +400,7 @@ func cancelInvoice(invoice *Invoice, hash *lntypes.Hash,
 			htlc, ContractCanceled, setID,
 		)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		if canceled {
@@ -452,10 +409,7 @@ func cancelInvoice(invoice *Invoice, hash *lntypes.Hash,
 		}
 	}
 
-	return &InvoiceUpdaterContext{
-		Invoice:    invoice,
-		UpdateTime: updateTime,
-	}, nil
+	return nil
 }
 
 // getUpdatedInvoiceState validates and processes an invoice state update. The
@@ -592,9 +546,8 @@ func getUpdatedInvoiceAmpState(invoice *Invoice, setID SetID,
 // HTLC set. We'll need to update the meta data in the  main invoice, and also
 // apply the new update to the update MAP, since all the HTLCs for a given HTLC
 // set need to be written in-line with each other.
-func cancelHtlcsAmp(invoice *Invoice,
-	updateMap map[SetID]map[models.CircuitKey]*InvoiceHTLC,
-	htlc *InvoiceHTLC, circuitKey models.CircuitKey) {
+func cancelHtlcsAmp(invoice *Invoice, circuitKey models.CircuitKey,
+	htlc *InvoiceHTLC, updater InvoiceUpdater) error {
 
 	setID := htlc.AMP.Record.SetID()
 
@@ -607,31 +560,18 @@ func cancelHtlcsAmp(invoice *Invoice,
 
 	invoice.AMPState[setID] = newAmpState
 
-	if _, ok := updateMap[setID]; !ok {
-		// Only HTLCs in the accepted state, can be cancelled, but we
-		// also want to merge that with HTLCs that may be canceled as
-		// well since it can be cancelled one by one.
-		updateMap[setID] = invoice.HTLCSet(
-			&setID, HtlcStateAccepted,
-		)
-
-		cancelledHtlcs := invoice.HTLCSet(
-			&setID, HtlcStateCanceled,
-		)
-		for htlcKey, htlc := range cancelledHtlcs {
-			updateMap[setID][htlcKey] = htlc
-		}
+	err := updater.CancelHtlcAmp(setID, circuitKey)
+	if err != nil {
+		return err
 	}
-
-	// Finally, include the newly cancelled HTLC in the set of HTLCs we
-	// need to cancel.
-	updateMap[setID][circuitKey] = htlc
 
 	// We'll only decrement the total amount paid if the invoice was
 	// already in the accepted state.
 	if invoice.AmtPaid != 0 {
 		invoice.AmtPaid -= htlc.Amt
 	}
+
+	return nil
 }
 
 // canCancelSingleHtlc validates cancellation of a single HTLC. If nil is
@@ -652,44 +592,27 @@ func canCancelSingleHtlc(htlc *InvoiceHTLC, invoiceState ContractState) error {
 	return nil
 }
 
-// updateHtlcsAmp takes an invoice, and a new HTLC to be added (along with its
-// set ID), and update sthe internal AMP state of an invoice, and also tallies
+// acceptHtlcsAmp takes an invoice, and a new HTLC to be added (along with its
+// set ID), and updates the internal AMP state of an invoice, and also tallies
 // the set of HTLCs to be updated on disk.
-func updateHtlcsAmp(invoice *Invoice,
-	updateMap map[SetID]map[models.CircuitKey]*InvoiceHTLC,
-	htlc *InvoiceHTLC, setID SetID,
-	circuitKey models.CircuitKey) {
+func acceptHtlcsAmp(invoice *Invoice, setID SetID, circuitKey models.CircuitKey,
+	htlc *InvoiceHTLC, updater InvoiceUpdater) error {
 
 	newAmpState := getUpdatedInvoiceAmpState(
 		invoice, setID, circuitKey, HtlcStateAccepted, htlc.Amt,
 	)
 	invoice.AMPState[setID] = newAmpState
 
-	// Now that we've updated the invoice state, we'll inform the caller of
-	// the _neitre_ HTLC set they need to write for this new set ID.
-	if _, ok := updateMap[setID]; !ok {
-		// If we're just now creating the HTLCs for this set then we'll
-		// also pull in the existing HTLCs are part of this set, so we
-		// can write them all to disk together (same value)
-		updateMap[setID] = invoice.HTLCSet(
-			(*[32]byte)(&setID), HtlcStateAccepted,
-		)
-	}
-	updateMap[setID][circuitKey] = htlc
+	return updater.AcceptHtlcAmp(setID, circuitKey)
 }
 
 // settleHtlcsAmp processes a new settle operation on an HTLC set for an AMP
 // invoice. We'll update some meta data in the main invoice, and also signal
 // that this HTLC set needs to be re-written back to disk.
-func settleHtlcsAmp(invoice *Invoice,
-	settledSetIDs map[SetID]struct{},
-	updateMap map[SetID]map[models.CircuitKey]*InvoiceHTLC,
-	htlc *InvoiceHTLC, circuitKey models.CircuitKey) {
+func settleHtlcsAmp(invoice *Invoice, circuitKey models.CircuitKey,
+	htlc *InvoiceHTLC, updater InvoiceUpdater) error {
 
-	// First, add the set ID to the set that was settled in this invoice
-	// update. We'll use this later to update the settle index.
 	setID := htlc.AMP.Record.SetID()
-	settledSetIDs[setID] = struct{}{}
 
 	// Next update the main AMP meta-data to indicate that this HTLC set
 	// has been fully settled.
@@ -699,12 +622,7 @@ func settleHtlcsAmp(invoice *Invoice,
 
 	invoice.AMPState[setID] = newAmpState
 
-	// Finally, we'll add this to the set of HTLCs that need to be updated.
-	if _, ok := updateMap[setID]; !ok {
-		mapEntry := make(map[models.CircuitKey]*InvoiceHTLC)
-		updateMap[setID] = mapEntry
-	}
-	updateMap[setID][circuitKey] = htlc
+	return updater.SettleHtlcAmp(setID, circuitKey)
 }
 
 // getUpdatedHtlcState aligns the state of an htlc with the given invoice state.

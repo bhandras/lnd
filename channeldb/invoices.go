@@ -651,18 +651,22 @@ func (d *DB) UpdateInvoice(_ context.Context, ref invpkg.InvoiceRef,
 			return err
 		}
 
+		now := d.clock.Now()
 		updater := &kvInvoiceUpdater{
-			db:          d,
-			invoices:    invoices,
-			settleIndex: settleIndex,
-			setIDIndex:  setIDIndex,
-			invoiceNum:  invoiceNum,
+			db:              d,
+			invoices:        invoices,
+			settleIndex:     settleIndex,
+			setIDIndex:      setIDIndex,
+			updateTime:      now,
+			invoiceNum:      invoiceNum,
+			invoice:         &invoice,
+			updatedAmpHtlcs: make(map[invpkg.SetID]map[models.CircuitKey]*invpkg.InvoiceHTLC), // nolint: lll
+			settledSetIDs:   make(map[invpkg.SetID]struct{}),
 		}
 
-		now := d.clock.Now()
 		payHash := ref.PayHash()
 		updatedInvoice, err = invpkg.UpdateInvoice(
-			payHash, &invoice, now, callback, updater,
+			payHash, updater.invoice, now, callback, updater,
 		)
 
 		return err
@@ -1779,16 +1783,105 @@ type kvInvoiceUpdater struct {
 	invoices    kvdb.RwBucket
 	settleIndex kvdb.RwBucket
 	setIDIndex  kvdb.RwBucket
-	invoiceNum  []byte
+
+	updateTime time.Time
+
+	invoiceNum []byte
+	invoice    *invpkg.Invoice
+
+	// ampHtlcsUpdate holds the set of AMP HTLCs that were added or
+	// cancelled as part of this update. This is only set for
+	// StoreAddHtlcsUpdate and StoreCancelHtlcsUpdate.
+	updatedAmpHtlcs map[invpkg.SetID]map[models.CircuitKey]*invpkg.InvoiceHTLC
+
+	settledSetIDs map[invpkg.SetID]struct{}
+}
+
+func (k *kvInvoiceUpdater) AcceptHtlcAmp(setID [32]byte,
+	circuitKey models.CircuitKey) error {
+
+	if _, ok := k.updatedAmpHtlcs[setID]; !ok {
+		// If we're just now creating the HTLCs for this set then we'll
+		// also pull in the existing HTLCs are part of this set, so we
+		// can write them all to disk together (same value)
+		k.updatedAmpHtlcs[setID] = k.invoice.HTLCSet(
+			(*[32]byte)(&setID), invpkg.HtlcStateAccepted,
+		)
+	}
+
+	k.updatedAmpHtlcs[setID][circuitKey] = k.invoice.Htlcs[circuitKey]
+
+	return nil
+}
+
+func (k *kvInvoiceUpdater) SettleHtlcAmp(setID [32]byte,
+	circuitKey models.CircuitKey) error {
+
+	// Add the set ID to the set that was settled in this invoice
+	// update. We'll use this later to update the settle index.
+	k.settledSetIDs[setID] = struct{}{}
+
+	if _, ok := k.updatedAmpHtlcs[setID]; !ok {
+		mapEntry := make(map[models.CircuitKey]*invpkg.InvoiceHTLC)
+		k.updatedAmpHtlcs[setID] = mapEntry
+	}
+
+	k.updatedAmpHtlcs[setID][circuitKey] = k.invoice.Htlcs[circuitKey]
+
+	return nil
+}
+
+func (k *kvInvoiceUpdater) CancelHtlcAmp(setID [32]byte,
+	circuitKey models.CircuitKey) error {
+
+	htlc := k.invoice.Htlcs[circuitKey]
+
+	if _, ok := k.updatedAmpHtlcs[setID]; !ok {
+		// Only HTLCs in the accepted state, can be cancelled, but we
+		// also want to merge that with HTLCs that may be canceled as
+		// well since it can be cancelled one by one.
+		k.updatedAmpHtlcs[setID] = k.invoice.HTLCSet(
+			&setID, invpkg.HtlcStateAccepted,
+		)
+
+		cancelledHtlcs := k.invoice.HTLCSet(
+			&setID, invpkg.HtlcStateCanceled,
+		)
+		for htlcKey, htlc := range cancelledHtlcs {
+			k.updatedAmpHtlcs[setID][htlcKey] = htlc
+		}
+	}
+
+	// Finally, include the newly cancelled HTLC in the set of HTLCs we
+	// need to cancel.
+	k.updatedAmpHtlcs[setID][circuitKey] = htlc
+
+	return nil
+}
+
+func (k *kvInvoiceUpdater) Commit(updateType invpkg.UpdateType) error {
+	switch updateType {
+	case invpkg.AddHTLCsUpdate:
+		return k.storeAddHtlcsUpdate()
+
+	case invpkg.CancelHTLCsUpdate:
+		return k.storeCancelHtlcsUpdate()
+
+	case invpkg.SettleHodlInvoiceUpdate:
+		return k.storeSettleHodlInvoiceUpdate()
+
+	case invpkg.CancelInvoiceUpdate:
+		return k.storeCancelInvoiceUpdate()
+	}
+
+	return fmt.Errorf("unknown update type: %v", updateType)
 }
 
 // StoreCancelHtlcsUpdate updates the invoice in the database after cancelling a
 // set of HTLCs.
-func (k *kvInvoiceUpdater) StoreCancelHtlcsUpdate(
-	ctx invpkg.InvoiceUpdaterContext) error {
-
+func (k *kvInvoiceUpdater) storeCancelHtlcsUpdate() error {
 	err := k.db.serializeAndStoreInvoice(
-		k.invoices, k.invoiceNum, ctx.Invoice,
+		k.invoices, k.invoiceNum, k.invoice,
 	)
 	if err != nil {
 		return err
@@ -1798,13 +1891,10 @@ func (k *kvInvoiceUpdater) StoreCancelHtlcsUpdate(
 	// of the HTLCs in-line with the invoice, using the invoice ID
 	// as a prefix, and the AMP key as a suffix: invoiceNum ||
 	// setID.
-	if ctx.Invoice.IsAMP() {
-		err := updateAMPInvoices(
-			k.invoices, k.invoiceNum, ctx.AMPHTLCsUpdate,
+	if k.invoice.IsAMP() {
+		return updateAMPInvoices(
+			k.invoices, k.invoiceNum, k.updatedAmpHtlcs,
 		)
-		if err != nil {
-			return err
-		}
 	}
 
 	return nil
@@ -1812,12 +1902,10 @@ func (k *kvInvoiceUpdater) StoreCancelHtlcsUpdate(
 
 // StoreAddHtlcsUpdate updates the invoice in the database after adding a set of
 // HTLCs.
-func (k *kvInvoiceUpdater) StoreAddHtlcsUpdate(
-	ctx invpkg.InvoiceUpdaterContext) error {
+func (k *kvInvoiceUpdater) storeAddHtlcsUpdate() error {
+	invoiceIsAMP := k.invoice.IsAMP()
 
-	invoiceIsAMP := ctx.Invoice.IsAMP()
-
-	for htlcSetID := range ctx.AMPHTLCsUpdate {
+	for htlcSetID := range k.updatedAmpHtlcs {
 		// Check if this SetID already exist.
 		setIDInvNum := k.setIDIndex.Get(htlcSetID[:])
 
@@ -1836,10 +1924,10 @@ func (k *kvInvoiceUpdater) StoreAddHtlcsUpdate(
 	// If this is a non-AMP invoice, then the state can eventually go to
 	// ContractSettled, so we pass in  nil value as part of
 	// setSettleMetaFields.
-	if !invoiceIsAMP && ctx.Invoice.State == invpkg.ContractSettled {
+	if !invoiceIsAMP && k.invoice.State == invpkg.ContractSettled {
 		err := setSettleMetaFields(
-			k.settleIndex, k.invoiceNum, ctx.Invoice,
-			ctx.UpdateTime, nil,
+			k.settleIndex, k.invoiceNum, k.invoice,
+			k.updateTime, nil,
 		)
 		if err != nil {
 			return err
@@ -1848,11 +1936,11 @@ func (k *kvInvoiceUpdater) StoreAddHtlcsUpdate(
 
 	// As we don't update the settle index above for AMP invoices, we'll do
 	// it here for each sub-AMP invoice that was settled.
-	for settledSetID := range ctx.SettledSetIDs {
+	for settledSetID := range k.settledSetIDs {
 		settledSetID := settledSetID
 		err := setSettleMetaFields(
-			k.settleIndex, k.invoiceNum, ctx.Invoice,
-			ctx.UpdateTime, &settledSetID,
+			k.settleIndex, k.invoiceNum, k.invoice,
+			k.updateTime, &settledSetID,
 		)
 		if err != nil {
 			return err
@@ -1860,7 +1948,7 @@ func (k *kvInvoiceUpdater) StoreAddHtlcsUpdate(
 	}
 
 	err := k.db.serializeAndStoreInvoice(
-		k.invoices, k.invoiceNum, ctx.Invoice,
+		k.invoices, k.invoiceNum, k.invoice,
 	)
 	if err != nil {
 		return err
@@ -1870,12 +1958,9 @@ func (k *kvInvoiceUpdater) StoreAddHtlcsUpdate(
 	// HTLCs in-line with the invoice, using the invoice ID as a prefix,
 	// and the AMP key as a suffix: invoiceNum || setID.
 	if invoiceIsAMP {
-		err := updateAMPInvoices(
-			k.invoices, k.invoiceNum, ctx.AMPHTLCsUpdate,
+		return updateAMPInvoices(
+			k.invoices, k.invoiceNum, k.updatedAmpHtlcs,
 		)
-		if err != nil {
-			return err
-		}
 	}
 
 	return nil
@@ -1883,33 +1968,24 @@ func (k *kvInvoiceUpdater) StoreAddHtlcsUpdate(
 
 // StoreSettleHodlInvoiceUpdate updates the invoice in the database after
 // settling a hodl invoice.
-func (k *kvInvoiceUpdater) StoreSettleHodlInvoiceUpdate(
-	ctx invpkg.InvoiceUpdaterContext) error {
-
+func (k *kvInvoiceUpdater) storeSettleHodlInvoiceUpdate() error {
 	err := setSettleMetaFields(
-		k.settleIndex, k.invoiceNum, ctx.Invoice, ctx.UpdateTime, nil,
+		k.settleIndex, k.invoiceNum, k.invoice, k.updateTime, nil,
 	)
 	if err != nil {
 		return err
 	}
 
-	err = k.db.serializeAndStoreInvoice(
-		k.invoices, k.invoiceNum, ctx.Invoice,
+	return k.db.serializeAndStoreInvoice(
+		k.invoices, k.invoiceNum, k.invoice,
 	)
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 // StoreCancelInvoiceUpdate updates the invoice in the database after cancelling
 // an invoice.
-func (k *kvInvoiceUpdater) StoreCancelInvoiceUpdate(
-	ctx invpkg.InvoiceUpdaterContext) error {
-
+func (k *kvInvoiceUpdater) storeCancelInvoiceUpdate() error {
 	return k.db.serializeAndStoreInvoice(
-		k.invoices, k.invoiceNum, ctx.Invoice,
+		k.invoices, k.invoiceNum, k.invoice,
 	)
 }
 
