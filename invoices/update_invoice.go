@@ -49,14 +49,16 @@ func UpdateInvoice(hash *lntypes.Hash, invoice *Invoice, updateTime time.Time,
 
 	case SettleHodlInvoiceUpdate:
 		err := settleHodlInvoice(
-			invoice, hash, updateTime, update.State,
+			invoice, hash, updateTime, update.State, updater,
 		)
 		if err != nil {
 			return nil, err
 		}
 
 	case CancelInvoiceUpdate:
-		err := cancelInvoice(invoice, hash, updateTime, update.State)
+		err := cancelInvoice(
+			invoice, hash, updateTime, update.State, updater,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -93,8 +95,12 @@ func cancelHTLCs(invoice *Invoice, updateTime time.Time,
 			return err
 		}
 
-		htlc.State = HtlcStateCanceled
-		htlc.ResolveTime = updateTime
+		err = resolveHtlc(
+			key, htlc, HtlcStateCanceled, updateTime, updater,
+		)
+		if err != nil {
+			return err
+		}
 
 		// Tally this into the set of HTLCs that need to be updated on
 		// disk, but once again, only if this is an AMP invoice.
@@ -141,6 +147,9 @@ func addHTLCs(invoice *Invoice, hash *lntypes.Hash, updateTime time.Time,
 			AMP:           htlcUpdate.AMP.Copy(),
 		}
 
+		if err := updater.AddHtlc(key, htlc); err != nil {
+			return err
+		}
 		invoice.Htlcs[key] = htlc
 
 		// Collect the set of new HTLCs so we can write them properly
@@ -181,6 +190,10 @@ func addHTLCs(invoice *Invoice, hash *lntypes.Hash, updateTime time.Time,
 		// each _htlc set_ instead. However, we'll allow the invoice to
 		// transition to the cancelled state regardless.
 		if !invoiceIsAMP || *newState == ContractCanceled {
+			err := updater.UpdateInvoiceState(*newState, preimage)
+			if err != nil {
+				return err
+			}
 			invoice.State = *newState
 			invoice.Terms.PaymentPreimage = preimage
 		}
@@ -206,6 +219,12 @@ func addHTLCs(invoice *Invoice, hash *lntypes.Hash, updateTime time.Time,
 			// If we don't already have a preimage for this HTLC, we
 			// can set it now.
 			case ok && htlc.AMP.Preimage == nil:
+				err := updater.AddAmpHtlcPreimage(
+					htlc.AMP.Record.SetID(), key, preimage,
+				)
+				if err != nil {
+					return err
+				}
 				htlc.AMP.Preimage = &preimage
 
 			// Otherwise, prevent over-writing an existing
@@ -237,8 +256,9 @@ func addHTLCs(invoice *Invoice, hash *lntypes.Hash, updateTime time.Time,
 		}
 
 		if htlcStateChanged {
-			htlc.State = htlcState
-			htlc.ResolveTime = updateTime
+			err = resolveHtlc(
+				key, htlc, htlcState, updateTime, updater,
+			)
 		}
 
 		htlcSettled := htlcStateChanged && htlcState == HtlcStateSettled
@@ -286,11 +306,35 @@ func addHTLCs(invoice *Invoice, hash *lntypes.Hash, updateTime time.Time,
 	// For non-AMP invoices we recalculate the amount paid from scratch
 	// each time, while for AMP invoices, we'll accumulate only based on
 	// newly added HTLCs.
-	if !invoiceIsAMP {
-		invoice.AmtPaid = amtPaid
-	} else {
-		invoice.AmtPaid += amtPaid
+	if invoiceIsAMP {
+		amtPaid += invoice.AmtPaid
 	}
+
+	return updateInvoiceAmtPaid(invoice, amtPaid, updater)
+
+}
+
+func resolveHtlc(circuitKey models.CircuitKey, htlc *InvoiceHTLC,
+	state HtlcState, resolveTime time.Time, updater InvoiceUpdater) error {
+
+	err := updater.ResolveHtlc(circuitKey, state, resolveTime)
+	if err != nil {
+		return err
+	}
+	htlc.State = state
+	htlc.ResolveTime = resolveTime
+
+	return nil
+}
+
+func updateInvoiceAmtPaid(invoice *Invoice, amt lnwire.MilliSatoshi,
+	updater InvoiceUpdater) error {
+
+	err := updater.UpdateInvoiceAmtPaid(amt)
+	if err != nil {
+		return err
+	}
+	invoice.AmtPaid = amt
 
 	return nil
 }
@@ -299,7 +343,8 @@ func addHTLCs(invoice *Invoice, hash *lntypes.Hash, updateTime time.Time,
 //
 // NOTE: Currently it is not possible to have HODL AMP invoices.
 func settleHodlInvoice(invoice *Invoice, hash *lntypes.Hash,
-	updateTime time.Time, update *InvoiceStateUpdateDesc) error {
+	updateTime time.Time, update *InvoiceStateUpdateDesc,
+	updater InvoiceUpdater) error {
 
 	if !invoice.HodlInvoice {
 		return fmt.Errorf("unable to settle hodl invoice: %v is "+
@@ -333,12 +378,16 @@ func settleHodlInvoice(invoice *Invoice, hash *lntypes.Hash,
 			"new computed state is not settled: %s", newState)
 	}
 
+	err = updater.UpdateInvoiceState(ContractSettled, preimage)
+	if err != nil {
+		return err
+	}
 	invoice.State = ContractSettled
 	invoice.Terms.PaymentPreimage = preimage
 
 	// TODO(positiveblue): this logic can be further simplified.
 	var amtPaid lnwire.MilliSatoshi
-	for _, htlc := range invoice.Htlcs {
+	for key, htlc := range invoice.Htlcs {
 		settled, _, err := getUpdatedHtlcState(
 			htlc, ContractSettled, nil,
 		)
@@ -347,21 +396,26 @@ func settleHodlInvoice(invoice *Invoice, hash *lntypes.Hash,
 		}
 
 		if settled {
-			htlc.State = HtlcStateSettled
-			htlc.ResolveTime = updateTime
+			err = resolveHtlc(
+				key, htlc, HtlcStateSettled, updateTime,
+				updater,
+			)
+			if err != nil {
+				return err
+			}
+
 			amtPaid += htlc.Amt
 		}
 	}
 
-	invoice.AmtPaid = amtPaid
-
-	return nil
+	return updateInvoiceAmtPaid(invoice, amtPaid, updater)
 }
 
 // cancelInvoice attempts to cancel the given invoice. That includes changing
 // the invoice state and the state of any relevant HTLC.
 func cancelInvoice(invoice *Invoice, hash *lntypes.Hash,
-	updateTime time.Time, update *InvoiceStateUpdateDesc) error {
+	updateTime time.Time, update *InvoiceStateUpdateDesc,
+	updater InvoiceUpdater) error {
 
 	switch {
 	case update == nil:
@@ -393,9 +447,13 @@ func cancelInvoice(invoice *Invoice, hash *lntypes.Hash,
 			newState)
 	}
 
+	err = updater.UpdateInvoiceState(ContractCanceled, nil)
+	if err != nil {
+		return err
+	}
 	invoice.State = ContractCanceled
 
-	for _, htlc := range invoice.Htlcs {
+	for key, htlc := range invoice.Htlcs {
 		canceled, _, err := getUpdatedHtlcState(
 			htlc, ContractCanceled, setID,
 		)
@@ -404,8 +462,13 @@ func cancelInvoice(invoice *Invoice, hash *lntypes.Hash,
 		}
 
 		if canceled {
-			htlc.State = HtlcStateCanceled
-			htlc.ResolveTime = updateTime
+			err = resolveHtlc(
+				key, htlc, HtlcStateCanceled, updateTime,
+				updater,
+			)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -560,6 +623,11 @@ func cancelHtlcsAmp(invoice *Invoice, circuitKey models.CircuitKey,
 
 	invoice.AMPState[setID] = newAmpState
 
+	// Mark the updates as needing to be written to disk.
+	if err := updater.UpdateAmpState(setID, newAmpState); err != nil {
+		return err
+	}
+
 	err := updater.CancelHtlcAmp(setID, circuitKey)
 	if err != nil {
 		return err
@@ -568,7 +636,9 @@ func cancelHtlcsAmp(invoice *Invoice, circuitKey models.CircuitKey,
 	// We'll only decrement the total amount paid if the invoice was
 	// already in the accepted state.
 	if invoice.AmtPaid != 0 {
-		invoice.AmtPaid -= htlc.Amt
+		return updateInvoiceAmtPaid(
+			invoice, invoice.AmtPaid-htlc.Amt, updater,
+		)
 	}
 
 	return nil
@@ -603,6 +673,11 @@ func acceptHtlcsAmp(invoice *Invoice, setID SetID, circuitKey models.CircuitKey,
 	)
 	invoice.AMPState[setID] = newAmpState
 
+	// Mark the updates as needing to be written to disk.
+	if err := updater.UpdateAmpState(setID, newAmpState); err != nil {
+		return err
+	}
+
 	return updater.AcceptHtlcAmp(setID, circuitKey)
 }
 
@@ -621,6 +696,11 @@ func settleHtlcsAmp(invoice *Invoice, circuitKey models.CircuitKey,
 	)
 
 	invoice.AMPState[setID] = newAmpState
+
+	// Mark the updates as needing to be written to disk.
+	if err := updater.UpdateAmpState(setID, newAmpState); err != nil {
+		return err
+	}
 
 	return updater.SettleHtlcAmp(setID, circuitKey)
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/lightningnetwork/lnd/channeldb/models"
 	"github.com/lightningnetwork/lnd/lntypes"
+	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/record"
 )
 
@@ -169,19 +170,20 @@ type CircuitKey = models.CircuitKey
 // in-memory update of an invoice is complete, and the database needs to be
 // updated.
 type InvoiceUpdater interface {
-	// TODO(bhandras): add theses methods to the interface.
+	AddHtlc(circuitKey CircuitKey, newHtlc *InvoiceHTLC) error
 
-	//UpdateInvoiceState(newState ContractState) error
+	ResolveHtlc(circuitKey CircuitKey, state HtlcState,
+		resolveTime time.Time) error
 
-	//ResolveHtlc(circuitKey CircuitKey, state HtlcState,
-	//	resolveTime time.Time) error
+	AddAmpHtlcPreimage(setID [32]byte, circuitKey CircuitKey,
+		preimage lntypes.Preimage) error
 
-	//AddAmpHtlcPreimage(setID [32]byte, circuitKey CircuitKey,
-	//	preimage lntypes.Preimage) error
+	UpdateInvoiceState(newState ContractState,
+		preimage *lntypes.Preimage) error
 
-	//UpdteInvoiceAmtPaid(amtPaid lnwire.MilliSatoshi) error
+	UpdateInvoiceAmtPaid(amtPaid lnwire.MilliSatoshi) error
 
-	//UpdateAmpState(setID [32]byte, newState InvoiceStateAMP) error
+	UpdateAmpState(setID [32]byte, newState InvoiceStateAMP) error
 
 	AcceptHtlcAmp(setID [32]byte, circuitKey CircuitKey) error
 

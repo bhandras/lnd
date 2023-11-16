@@ -1797,6 +1797,46 @@ type kvInvoiceUpdater struct {
 	settledSetIDs map[invpkg.SetID]struct{}
 }
 
+// NOTE: this method does nothing the k/v InvoiceUpdater.
+func (k *kvInvoiceUpdater) AddHtlc(_ models.CircuitKey,
+	_ *invpkg.InvoiceHTLC) error {
+
+	return nil
+}
+
+// NOTE: this method does nothing the k/v InvoiceUpdater.
+func (k *kvInvoiceUpdater) ResolveHtlc(_ models.CircuitKey, _ invpkg.HtlcState,
+	_ time.Time) error {
+
+	return nil
+}
+
+// NOTE: this method does nothing the k/v InvoiceUpdater.
+func (k *kvInvoiceUpdater) AddAmpHtlcPreimage(_ [32]byte, _ models.CircuitKey,
+	_ lntypes.Preimage) error {
+
+	return nil
+}
+
+// NOTE: this method does nothing the k/v InvoiceUpdater.
+func (k *kvInvoiceUpdater) UpdateInvoiceState(_ invpkg.ContractState,
+	_ *lntypes.Preimage) error {
+
+	return nil
+}
+
+// NOTE: this method does nothing the k/v InvoiceUpdater.
+func (k *kvInvoiceUpdater) UpdateInvoiceAmtPaid(_ lnwire.MilliSatoshi) error {
+	return nil
+}
+
+// NOTE: this method does nothing in the k/v InvoiceUpdater.
+func (k *kvInvoiceUpdater) UpdateAmpState(_ [32]byte,
+	_ invpkg.InvoiceStateAMP) error {
+
+	return nil
+}
+
 func (k *kvInvoiceUpdater) AcceptHtlcAmp(setID [32]byte,
 	circuitKey models.CircuitKey) error {
 
