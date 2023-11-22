@@ -517,7 +517,7 @@ func testFailInvoiceLookupMPPPayAddrOnly(t *testing.T,
 	// for the given HTLC.
 	ref := invpkg.InvoiceRefByHashAndAddr(payHash, payAddr)
 	_, err = db.LookupInvoice(ctxb, ref)
-	require.Equal(t, invpkg.ErrInvoiceNotFound, err)
+	require.ErrorIs(t, err, invpkg.ErrInvoiceNotFound)
 }
 
 // testInvRefEquivocation asserts that retrieving or updating an invoice using
@@ -695,7 +695,7 @@ func testInvoiceCancelSingleHtlcAMP(t *testing.T,
 
 	// At this point, we should detect that 3k satoshis total has been
 	// paid.
-	require.Equal(t, dbInvoice.AmtPaid, amt*3)
+	require.Equal(t, int64(amt*3), int64(dbInvoice.AmtPaid))
 
 	callback := func(
 		invoice *invpkg.Invoice) (*invpkg.InvoiceUpdateDesc, error) {
@@ -971,7 +971,10 @@ func testInvoiceAddTimeSeries(t *testing.T,
 			t.Fatalf("unable to query: %v", err)
 		}
 
-		require.Equal(t, len(query.resp), len(resp))
+		require.Equal(
+			t, len(query.resp), len(resp),
+			fmt.Sprintf("test: #%v", i),
+		)
 
 		for j := 0; j < len(query.resp); j++ {
 			require.Equal(t,
@@ -1149,7 +1152,11 @@ func testSettleIndexAmpPayments(t *testing.T,
 			AddIndex: testInvoice.AddIndex,
 		},
 	})
-	require.Nil(t, err)
+	require.NoError(t, err)
+
+	settledInvoices, err = db.InvoicesSettledSince(ctxb, 0)
+	require.NoError(t, err)
+	require.Len(t, settledInvoices, 0)
 }
 
 // testFetchPendingInvoices tests that we can fetch all pending invoices from
