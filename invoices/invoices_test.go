@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +33,8 @@ var (
 	)
 
 	testNow = time.Unix(1, 0)
+
+	nextHtlcID atomic.Uint64
 )
 
 func randInvoice(value lnwire.MilliSatoshi) (*invpkg.Invoice, error) {
@@ -77,11 +80,13 @@ func randInvoice(value lnwire.MilliSatoshi) (*invpkg.Invoice, error) {
 }
 
 // settleTestInvoice settles a test invoice.
-func settleTestInvoice(invoice *invpkg.Invoice, settleIndex uint64) {
+func settleTestInvoice(invoice *invpkg.Invoice, htlcID uint64,
+	settleIndex uint64) {
+
 	invoice.SettleDate = testNow
 	invoice.AmtPaid = invoice.Terms.Value
 	invoice.State = invpkg.ContractSettled
-	invoice.Htlcs[models.CircuitKey{}] = &invpkg.InvoiceHTLC{
+	invoice.Htlcs[models.CircuitKey{HtlcID: htlcID}] = &invpkg.InvoiceHTLC{
 		Amt:           invoice.Terms.Value,
 		AcceptTime:    testNow,
 		ResolveTime:   testNow,
@@ -333,7 +338,7 @@ func testInvoiceWorkflowImpl(t *testing.T, test invWorkflowTest,
 	// now have the settled bit toggle to true and a non-default
 	// SettledDate
 	payAmt := fakeInvoice.Terms.Value * 2
-	_, err = db.UpdateInvoice(ctxb, ref, nil, getUpdateInvoice(payAmt))
+	_, err = db.UpdateInvoice(ctxb, ref, nil, getUpdateInvoice(0, payAmt))
 	require.NoError(t, err, "unable to settle invoice")
 	dbInvoice2, err := db.LookupInvoice(ctxb, ref)
 	require.NoError(t, err, "unable to fetch invoice")
@@ -902,8 +907,11 @@ func testInvoiceAddTimeSeries(t *testing.T,
 	_, err = db.InvoicesSettledSince(ctxb, 0)
 	require.NoError(t, err)
 
-	var settledInvoices []invpkg.Invoice
-	var settleIndex uint64 = 1
+	var (
+		settledInvoices []invpkg.Invoice
+		settleIndex     uint64 = 1
+		htlcID          uint64 = 0
+	)
 	// We'll now only settle the latter half of each of those invoices.
 	for i := 10; i < len(invoices); i++ {
 		invoice := &invoices[i]
@@ -912,15 +920,18 @@ func testInvoiceAddTimeSeries(t *testing.T,
 
 		ref := invpkg.InvoiceRefByHash(paymentHash)
 		_, err := db.UpdateInvoice(
-			ctxb, ref, nil, getUpdateInvoice(invoice.Terms.Value),
+			ctxb, ref, nil, getUpdateInvoice(
+				htlcID, invoice.Terms.Value,
+			),
 		)
 		if err != nil {
 			t.Fatalf("unable to settle invoice: %v", err)
 		}
 
 		// Create the settled invoice for the expectation set.
-		settleTestInvoice(invoice, settleIndex)
+		settleTestInvoice(invoice, htlcID, settleIndex)
 		settleIndex++
+		htlcID++
 
 		settledInvoices = append(settledInvoices, *invoice)
 	}
@@ -1158,7 +1169,11 @@ func testFetchPendingInvoices(t *testing.T,
 	require.Empty(t, pending)
 
 	const numInvoices = 20
-	var settleIndex uint64 = 1
+	var (
+		settleIndex uint64 = 1
+		htlcID      uint64 = 0
+	)
+
 	pendingInvoices := make(map[lntypes.Hash]invpkg.Invoice)
 
 	for i := 1; i <= numInvoices; i++ {
@@ -1182,11 +1197,14 @@ func testFetchPendingInvoices(t *testing.T,
 		}
 
 		ref := invpkg.InvoiceRefByHash(paymentHash)
-		_, err = db.UpdateInvoice(ctxb, ref, nil, getUpdateInvoice(amt))
+		_, err = db.UpdateInvoice(
+			ctxb, ref, nil, getUpdateInvoice(htlcID, amt),
+		)
 		require.NoError(t, err)
 
-		settleTestInvoice(invoice, settleIndex)
+		settleTestInvoice(invoice, htlcID, settleIndex)
 		settleIndex++
+		htlcID++
 	}
 
 	// Fetch all pending invoices.
@@ -1219,7 +1237,7 @@ func testDuplicateSettleInvoice(t *testing.T,
 	// With the invoice in the DB, we'll now attempt to settle the invoice.
 	ref := invpkg.InvoiceRefByHash(payHash)
 	dbInvoice, err := db.UpdateInvoice(
-		ctxb, ref, nil, getUpdateInvoice(amt),
+		ctxb, ref, nil, getUpdateInvoice(0, amt),
 	)
 	require.NoError(t, err, "unable to settle invoice")
 
@@ -1244,7 +1262,9 @@ func testDuplicateSettleInvoice(t *testing.T,
 
 	// If we try to settle the invoice again, then we should get the very
 	// same invoice back, but with an error this time.
-	dbInvoice, err = db.UpdateInvoice(ctxb, ref, nil, getUpdateInvoice(amt))
+	dbInvoice, err = db.UpdateInvoice(
+		ctxb, ref, nil, getUpdateInvoice(1, amt),
+	)
 	require.ErrorIs(t, err, invpkg.ErrInvoiceAlreadySettled)
 
 	if dbInvoice == nil {
@@ -1269,9 +1289,12 @@ func testQueryInvoices(t *testing.T,
 	// assume that the index of the invoice within the database is the same
 	// as the amount of the invoice itself.
 	const numInvoices = 50
-	var settleIndex uint64 = 1
-	var invoices []invpkg.Invoice
-	var pendingInvoices []invpkg.Invoice
+	var (
+		settleIndex     uint64 = 1
+		htlcID          uint64 = 0
+		invoices        []invpkg.Invoice
+		pendingInvoices []invpkg.Invoice
+	)
 
 	ctxb := context.Background()
 	for i := 1; i <= numInvoices; i++ {
@@ -1296,15 +1319,16 @@ func testQueryInvoices(t *testing.T,
 		if i%2 == 0 {
 			ref := invpkg.InvoiceRefByHash(paymentHash)
 			_, err := db.UpdateInvoice(
-				ctxb, ref, nil, getUpdateInvoice(amt),
+				ctxb, ref, nil, getUpdateInvoice(htlcID, amt),
 			)
 			if err != nil {
 				t.Fatalf("unable to settle invoice: %v", err)
 			}
 
 			// Create the settled invoice for the expectation set.
-			settleTestInvoice(invoice, settleIndex)
+			settleTestInvoice(invoice, htlcID, settleIndex)
 			settleIndex++
+			htlcID++
 		} else {
 			pendingInvoices = append(pendingInvoices, *invoice)
 		}
@@ -1662,7 +1686,9 @@ func testQueryInvoices(t *testing.T,
 
 // getUpdateInvoice returns an invoice update callback that, when called,
 // settles the invoice with the given amount.
-func getUpdateInvoice(amt lnwire.MilliSatoshi) invpkg.InvoiceUpdateCallback {
+func getUpdateInvoice(htlcID uint64,
+	amt lnwire.MilliSatoshi) invpkg.InvoiceUpdateCallback {
+
 	return func(invoice *invpkg.Invoice) (*invpkg.InvoiceUpdateDesc,
 		error) {
 
@@ -1672,7 +1698,7 @@ func getUpdateInvoice(amt lnwire.MilliSatoshi) invpkg.InvoiceUpdateCallback {
 
 		noRecords := make(record.CustomSet)
 		htlcs := map[models.CircuitKey]*invpkg.HtlcAcceptDesc{
-			{}: {
+			{HtlcID: htlcID}: {
 				Amt:           amt,
 				CustomRecords: noRecords,
 			},
@@ -2366,7 +2392,7 @@ func testUnexpectedInvoicePreimage(t *testing.T,
 	// payment hash against which to validate the preimage.
 	_, err = db.UpdateInvoice(
 		ctxb, invpkg.InvoiceRefByAddr(invoice.Terms.PaymentAddr), nil,
-		getUpdateInvoice(invoice.Terms.Value),
+		getUpdateInvoice(0, invoice.Terms.Value),
 	)
 
 	// Assert that we get ErrUnexpectedInvoicePreimage.
@@ -2501,7 +2527,9 @@ func testDeleteInvoices(t *testing.T,
 		if i == 1 {
 			invoice, err = db.UpdateInvoice(
 				ctxb, invpkg.InvoiceRefByHash(paymentHash), nil,
-				getUpdateInvoice(invoice.Terms.Value),
+				getUpdateInvoice(
+					uint64(i), invoice.Terms.Value,
+				),
 			)
 			require.NoError(t, err, "unable to settle invoice")
 		}
