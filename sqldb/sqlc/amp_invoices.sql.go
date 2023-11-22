@@ -11,67 +11,69 @@ import (
 	"time"
 )
 
-const deleteAMPHTLCCustomRecords = `-- name: DeleteAMPHTLCCustomRecords :exec
-WITH htlc_ids AS (
-    SELECT htlc_id
-    FROM amp_invoice_htlcs 
-    WHERE invoice_id = $1
+const fetchAMPInvoiceHTLCs = `-- name: FetchAMPInvoiceHTLCs :many
+SELECT 
+    amp.set_id, amp.root_share, amp.child_index, amp.hash, amp.preimage, 
+    invoice_htlcs.id, invoice_htlcs.chan_id, invoice_htlcs.htlc_id, invoice_htlcs.amount_msat, invoice_htlcs.total_mpp_msat, invoice_htlcs.accept_height, invoice_htlcs.accept_time, invoice_htlcs.expiry_height, invoice_htlcs.state, invoice_htlcs.resolve_time, invoice_htlcs.invoice_id
+FROM amp_invoice_htlcs amp
+INNER JOIN invoice_htlcs ON amp.htlc_id = invoice_htlcs.id
+WHERE amp.invoice_id = $1
+AND (
+    set_id = $2 OR 
+    $2 IS NULL
 )
-DELETE
-FROM invoice_htlc_custom_records
-WHERE htlc_id IN (SELECT id FROM htlc_ids)
 `
 
-func (q *Queries) DeleteAMPHTLCCustomRecords(ctx context.Context, invoiceID int64) error {
-	_, err := q.db.ExecContext(ctx, deleteAMPHTLCCustomRecords, invoiceID)
-	return err
+type FetchAMPInvoiceHTLCsParams struct {
+	InvoiceID int64
+	SetID     []byte
 }
 
-const deleteAMPHTLCs = `-- name: DeleteAMPHTLCs :exec
-DELETE 
-FROM amp_invoice_htlcs  
-WHERE invoice_id = $1
-`
-
-func (q *Queries) DeleteAMPHTLCs(ctx context.Context, invoiceID int64) error {
-	_, err := q.db.ExecContext(ctx, deleteAMPHTLCs, invoiceID)
-	return err
+type FetchAMPInvoiceHTLCsRow struct {
+	SetID        []byte
+	RootShare    []byte
+	ChildIndex   int64
+	Hash         []byte
+	Preimage     []byte
+	ID           int64
+	ChanID       string
+	HtlcID       int64
+	AmountMsat   int64
+	TotalMppMsat sql.NullInt64
+	AcceptHeight int32
+	AcceptTime   time.Time
+	ExpiryHeight int32
+	State        int16
+	ResolveTime  sql.NullTime
+	InvoiceID    int64
 }
 
-const deleteAMPInvoiceHTLC = `-- name: DeleteAMPInvoiceHTLC :exec
-DELETE 
-FROM amp_invoice_htlcs
-WHERE set_id = $1
-`
-
-func (q *Queries) DeleteAMPInvoiceHTLC(ctx context.Context, setID []byte) error {
-	_, err := q.db.ExecContext(ctx, deleteAMPInvoiceHTLC, setID)
-	return err
-}
-
-const getAMPInvoiceHTLCsByInvoiceID = `-- name: GetAMPInvoiceHTLCsByInvoiceID :many
-SELECT set_id, htlc_id, invoice_id, root_share, child_index, hash, preimage
-FROM amp_invoice_htlcs
-WHERE invoice_id = $1
-`
-
-func (q *Queries) GetAMPInvoiceHTLCsByInvoiceID(ctx context.Context, invoiceID int64) ([]AmpInvoiceHtlc, error) {
-	rows, err := q.db.QueryContext(ctx, getAMPInvoiceHTLCsByInvoiceID, invoiceID)
+func (q *Queries) FetchAMPInvoiceHTLCs(ctx context.Context, arg FetchAMPInvoiceHTLCsParams) ([]FetchAMPInvoiceHTLCsRow, error) {
+	rows, err := q.db.QueryContext(ctx, fetchAMPInvoiceHTLCs, arg.InvoiceID, arg.SetID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []AmpInvoiceHtlc
+	var items []FetchAMPInvoiceHTLCsRow
 	for rows.Next() {
-		var i AmpInvoiceHtlc
+		var i FetchAMPInvoiceHTLCsRow
 		if err := rows.Scan(
 			&i.SetID,
-			&i.HtlcID,
-			&i.InvoiceID,
 			&i.RootShare,
 			&i.ChildIndex,
 			&i.Hash,
 			&i.Preimage,
+			&i.ID,
+			&i.ChanID,
+			&i.HtlcID,
+			&i.AmountMsat,
+			&i.TotalMppMsat,
+			&i.AcceptHeight,
+			&i.AcceptTime,
+			&i.ExpiryHeight,
+			&i.State,
+			&i.ResolveTime,
+			&i.InvoiceID,
 		); err != nil {
 			return nil, err
 		}
@@ -86,29 +88,37 @@ func (q *Queries) GetAMPInvoiceHTLCsByInvoiceID(ctx context.Context, invoiceID i
 	return items, nil
 }
 
-const getAMPInvoiceHTLCsBySetID = `-- name: GetAMPInvoiceHTLCsBySetID :many
-SELECT set_id, htlc_id, invoice_id, root_share, child_index, hash, preimage
-FROM amp_invoice_htlcs
-WHERE set_id = $1
+const fetchAMPInvoices = `-- name: FetchAMPInvoices :many
+SELECT set_id, state, created_at, settled_at, settled_index, invoice_id
+FROM amp_invoices
+WHERE invoice_id = $1 
+AND (
+    set_id = $2 OR 
+    $2 IS NULL
+)
 `
 
-func (q *Queries) GetAMPInvoiceHTLCsBySetID(ctx context.Context, setID []byte) ([]AmpInvoiceHtlc, error) {
-	rows, err := q.db.QueryContext(ctx, getAMPInvoiceHTLCsBySetID, setID)
+type FetchAMPInvoicesParams struct {
+	InvoiceID int64
+	SetID     []byte
+}
+
+func (q *Queries) FetchAMPInvoices(ctx context.Context, arg FetchAMPInvoicesParams) ([]AmpInvoice, error) {
+	rows, err := q.db.QueryContext(ctx, fetchAMPInvoices, arg.InvoiceID, arg.SetID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []AmpInvoiceHtlc
+	var items []AmpInvoice
 	for rows.Next() {
-		var i AmpInvoiceHtlc
+		var i AmpInvoice
 		if err := rows.Scan(
 			&i.SetID,
-			&i.HtlcID,
+			&i.State,
+			&i.CreatedAt,
+			&i.SettledAt,
+			&i.SettledIndex,
 			&i.InvoiceID,
-			&i.RootShare,
-			&i.ChildIndex,
-			&i.Hash,
-			&i.Preimage,
 		); err != nil {
 			return nil, err
 		}
@@ -123,28 +133,82 @@ func (q *Queries) GetAMPInvoiceHTLCsBySetID(ctx context.Context, setID []byte) (
 	return items, nil
 }
 
-const getSetIDHTLCsCustomRecords = `-- name: GetSetIDHTLCsCustomRecords :many
-SELECT ihcr.htlc_id, key, value
-FROM amp_invoice_htlcs aih JOIN invoice_htlc_custom_records ihcr ON aih.id=ihcr.htlc_id 
-WHERE aih.set_id = $1
+const fetchSettledAmpInvoices = `-- name: FetchSettledAmpInvoices :many
+SELECT 
+    a.set_id, 
+    a.settled_index as amp_settled_index, 
+    a.settled_at as amp_settled_at,
+    i.id, i.hash, i.preimage, i.settled_index, i.settled_at, i.memo, i.amount_msat, i.cltv_delta, i.expiry, i.payment_addr, i.payment_request, i.state, i.amount_paid_msat, i.is_amp, i.is_hodl, i.is_keysend, i.created_at
+FROM amp_invoices a
+INNER JOIN invoices i ON a.invoice_id = i.id
+WHERE (
+    a.settled_index >= $1 OR
+    $1 IS NULL
+) AND (
+    a.settled_index <= $2 OR
+    $2 IS NULL
+)
 `
 
-type GetSetIDHTLCsCustomRecordsRow struct {
-	HtlcID int64
-	Key    int64
-	Value  []byte
+type FetchSettledAmpInvoicesParams struct {
+	SettledIndexGet sql.NullInt64
+	SettledIndexLet sql.NullInt64
 }
 
-func (q *Queries) GetSetIDHTLCsCustomRecords(ctx context.Context, setID []byte) ([]GetSetIDHTLCsCustomRecordsRow, error) {
-	rows, err := q.db.QueryContext(ctx, getSetIDHTLCsCustomRecords, setID)
+type FetchSettledAmpInvoicesRow struct {
+	SetID           []byte
+	AmpSettledIndex sql.NullInt64
+	AmpSettledAt    sql.NullTime
+	ID              int64
+	Hash            []byte
+	Preimage        []byte
+	SettledIndex    sql.NullInt64
+	SettledAt       sql.NullTime
+	Memo            sql.NullString
+	AmountMsat      int64
+	CltvDelta       sql.NullInt32
+	Expiry          int32
+	PaymentAddr     []byte
+	PaymentRequest  sql.NullString
+	State           int16
+	AmountPaidMsat  int64
+	IsAmp           bool
+	IsHodl          bool
+	IsKeysend       bool
+	CreatedAt       time.Time
+}
+
+func (q *Queries) FetchSettledAmpInvoices(ctx context.Context, arg FetchSettledAmpInvoicesParams) ([]FetchSettledAmpInvoicesRow, error) {
+	rows, err := q.db.QueryContext(ctx, fetchSettledAmpInvoices, arg.SettledIndexGet, arg.SettledIndexLet)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []GetSetIDHTLCsCustomRecordsRow
+	var items []FetchSettledAmpInvoicesRow
 	for rows.Next() {
-		var i GetSetIDHTLCsCustomRecordsRow
-		if err := rows.Scan(&i.HtlcID, &i.Key, &i.Value); err != nil {
+		var i FetchSettledAmpInvoicesRow
+		if err := rows.Scan(
+			&i.SetID,
+			&i.AmpSettledIndex,
+			&i.AmpSettledAt,
+			&i.ID,
+			&i.Hash,
+			&i.Preimage,
+			&i.SettledIndex,
+			&i.SettledAt,
+			&i.Memo,
+			&i.AmountMsat,
+			&i.CltvDelta,
+			&i.Expiry,
+			&i.PaymentAddr,
+			&i.PaymentRequest,
+			&i.State,
+			&i.AmountPaidMsat,
+			&i.IsAmp,
+			&i.IsHodl,
+			&i.IsKeysend,
+			&i.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -158,15 +222,27 @@ func (q *Queries) GetSetIDHTLCsCustomRecords(ctx context.Context, setID []byte) 
 	return items, nil
 }
 
-const insertAMPInvoiceHTLC = `-- name: InsertAMPInvoiceHTLC :exec
+const getAmpInvoiceID = `-- name: GetAmpInvoiceID :one
+SELECT invoice_id FROM amp_invoices WHERE set_id = $1
+`
+
+func (q *Queries) GetAmpInvoiceID(ctx context.Context, setID []byte) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getAmpInvoiceID, setID)
+	var invoice_id int64
+	err := row.Scan(&invoice_id)
+	return invoice_id, err
+}
+
+const insertAmpInvoiceHtlc = `-- name: InsertAmpInvoiceHtlc :exec
 INSERT INTO amp_invoice_htlcs (
-    set_id, htlc_id, root_share, child_index, hash, preimage
+    invoice_id, set_id, htlc_id, root_share, child_index, hash, preimage
 ) VALUES (
-    $1, $2, $3, $4, $5, $6
+    $1, $2, $3, $4, $5, $6, $7
 )
 `
 
-type InsertAMPInvoiceHTLCParams struct {
+type InsertAmpInvoiceHtlcParams struct {
+	InvoiceID  int64
 	SetID      []byte
 	HtlcID     int64
 	RootShare  []byte
@@ -175,8 +251,9 @@ type InsertAMPInvoiceHTLCParams struct {
 	Preimage   []byte
 }
 
-func (q *Queries) InsertAMPInvoiceHTLC(ctx context.Context, arg InsertAMPInvoiceHTLCParams) error {
-	_, err := q.db.ExecContext(ctx, insertAMPInvoiceHTLC,
+func (q *Queries) InsertAmpInvoiceHtlc(ctx context.Context, arg InsertAmpInvoiceHtlcParams) error {
+	_, err := q.db.ExecContext(ctx, insertAmpInvoiceHtlc,
+		arg.InvoiceID,
 		arg.SetID,
 		arg.HtlcID,
 		arg.RootShare,
@@ -187,140 +264,75 @@ func (q *Queries) InsertAMPInvoiceHTLC(ctx context.Context, arg InsertAMPInvoice
 	return err
 }
 
-const insertAMPInvoicePayment = `-- name: InsertAMPInvoicePayment :exec
-INSERT INTO amp_invoice_payments (
-    set_id, state, created_at, settled_index, invoice_id
-) VALUES (
-    $1, $2, $3, $4, $5
+const updateAmpInvoiceHtlcPreimage = `-- name: UpdateAmpInvoiceHtlcPreimage :execresult
+UPDATE amp_invoice_htlcs AS a
+SET preimage = $4
+WHERE a.invoice_id = $1 AND a.set_id = $2 AND a.htlc_id = (
+    SELECT id FROM invoice_htlcs AS i WHERE i.htlc_id = $3
 )
 `
 
-type InsertAMPInvoicePaymentParams struct {
-	SetID        []byte
-	State        int16
-	CreatedAt    time.Time
-	SettledIndex sql.NullInt64
-	InvoiceID    int64
+type UpdateAmpInvoiceHtlcPreimageParams struct {
+	InvoiceID int64
+	SetID     []byte
+	HtlcID    int64
+	Preimage  []byte
 }
 
-func (q *Queries) InsertAMPInvoicePayment(ctx context.Context, arg InsertAMPInvoicePaymentParams) error {
-	_, err := q.db.ExecContext(ctx, insertAMPInvoicePayment,
+func (q *Queries) UpdateAmpInvoiceHtlcPreimage(ctx context.Context, arg UpdateAmpInvoiceHtlcPreimageParams) (sql.Result, error) {
+	return q.db.ExecContext(ctx, updateAmpInvoiceHtlcPreimage,
+		arg.InvoiceID,
+		arg.SetID,
+		arg.HtlcID,
+		arg.Preimage,
+	)
+}
+
+const updateAmpInvoiceState = `-- name: UpdateAmpInvoiceState :exec
+UPDATE amp_invoices
+SET state = $2, 
+    settled_index = COALESCE(settled_index, $3),
+    settled_at = COALESCE(settled_at, $4)
+WHERE set_id = $1
+`
+
+type UpdateAmpInvoiceStateParams struct {
+	SetID        []byte
+	State        int16
+	SettledIndex sql.NullInt64
+	SettledAt    sql.NullTime
+}
+
+func (q *Queries) UpdateAmpInvoiceState(ctx context.Context, arg UpdateAmpInvoiceStateParams) error {
+	_, err := q.db.ExecContext(ctx, updateAmpInvoiceState,
+		arg.SetID,
+		arg.State,
+		arg.SettledIndex,
+		arg.SettledAt,
+	)
+	return err
+}
+
+const upsertAmpInvoice = `-- name: UpsertAmpInvoice :execresult
+INSERT INTO amp_invoices (
+    set_id, state, created_at, invoice_id
+) VALUES (
+    $1, $2, $3, $4
+) ON CONFLICT (set_id, invoice_id) DO NOTHING
+`
+
+type UpsertAmpInvoiceParams struct {
+	SetID     []byte
+	State     int16
+	CreatedAt time.Time
+	InvoiceID int64
+}
+
+func (q *Queries) UpsertAmpInvoice(ctx context.Context, arg UpsertAmpInvoiceParams) (sql.Result, error) {
+	return q.db.ExecContext(ctx, upsertAmpInvoice,
 		arg.SetID,
 		arg.State,
 		arg.CreatedAt,
-		arg.SettledIndex,
 		arg.InvoiceID,
 	)
-	return err
-}
-
-const selectAMPInvoicePayments = `-- name: SelectAMPInvoicePayments :many
-SELECT aip.set_id, aip.state, aip.created_at, aip.settled_index, aip.invoice_id, ip.id, ip.settled_at, ip.amount_paid_msat, ip.invoice_id
-FROM amp_invoice_payments aip LEFT JOIN invoice_payments ip ON aip.settled_index = ip.id
-WHERE (
-    set_id = $1 OR 
-    $1 IS NULL
-) AND (
-    aip.settled_index = $2 OR 
-    $2 IS NULL
-) AND (
-    aip.invoice_id = $3 OR 
-    $3 IS NULL
-)
-`
-
-type SelectAMPInvoicePaymentsParams struct {
-	SetID        []byte
-	SettledIndex sql.NullInt64
-	InvoiceID    sql.NullInt64
-}
-
-type SelectAMPInvoicePaymentsRow struct {
-	SetID          []byte
-	State          int16
-	CreatedAt      time.Time
-	SettledIndex   sql.NullInt64
-	InvoiceID      int64
-	ID             sql.NullInt64
-	SettledAt      sql.NullTime
-	AmountPaidMsat sql.NullInt64
-	InvoiceID_2    sql.NullInt64
-}
-
-func (q *Queries) SelectAMPInvoicePayments(ctx context.Context, arg SelectAMPInvoicePaymentsParams) ([]SelectAMPInvoicePaymentsRow, error) {
-	rows, err := q.db.QueryContext(ctx, selectAMPInvoicePayments, arg.SetID, arg.SettledIndex, arg.InvoiceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []SelectAMPInvoicePaymentsRow
-	for rows.Next() {
-		var i SelectAMPInvoicePaymentsRow
-		if err := rows.Scan(
-			&i.SetID,
-			&i.State,
-			&i.CreatedAt,
-			&i.SettledIndex,
-			&i.InvoiceID,
-			&i.ID,
-			&i.SettledAt,
-			&i.AmountPaidMsat,
-			&i.InvoiceID_2,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const updateAMPInvoiceHTLC = `-- name: UpdateAMPInvoiceHTLC :exec
-UPDATE amp_invoice_htlcs
-SET preimage = $1
-WHERE htlc_id = $2
-`
-
-type UpdateAMPInvoiceHTLCParams struct {
-	Preimage []byte
-	HtlcID   int64
-}
-
-func (q *Queries) UpdateAMPInvoiceHTLC(ctx context.Context, arg UpdateAMPInvoiceHTLCParams) error {
-	_, err := q.db.ExecContext(ctx, updateAMPInvoiceHTLC, arg.Preimage, arg.HtlcID)
-	return err
-}
-
-const updateAMPPayment = `-- name: UpdateAMPPayment :exec
-UPDATE amp_invoice_payments
-SET state = $1, settled_index = $2
-WHERE state = 0 AND (
-    set_id = $3 OR 
-    $3 IS NULL
-) AND (
-    invoice_id = $4 OR 
-    $4 IS NULL
-)
-`
-
-type UpdateAMPPaymentParams struct {
-	State        int16
-	SettledIndex sql.NullInt64
-	SetID        []byte
-	InvoiceID    sql.NullInt64
-}
-
-func (q *Queries) UpdateAMPPayment(ctx context.Context, arg UpdateAMPPaymentParams) error {
-	_, err := q.db.ExecContext(ctx, updateAMPPayment,
-		arg.State,
-		arg.SettledIndex,
-		arg.SetID,
-		arg.InvoiceID,
-	)
-	return err
 }

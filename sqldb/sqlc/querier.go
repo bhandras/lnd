@@ -6,22 +6,22 @@ package sqlc
 
 import (
 	"context"
+	"database/sql"
 )
 
 type Querier interface {
-	DeleteAMPHTLCCustomRecords(ctx context.Context, invoiceID int64) error
-	DeleteAMPHTLCs(ctx context.Context, invoiceID int64) error
-	DeleteAMPInvoiceHTLC(ctx context.Context, setID []byte) error
-	DeleteInvoice(ctx context.Context, arg DeleteInvoiceParams) error
+	DeleteCanceledInvoices(ctx context.Context) (sql.Result, error)
+	DeleteInvoice(ctx context.Context, arg DeleteInvoiceParams) (sql.Result, error)
 	DeleteInvoiceEvents(ctx context.Context, invoiceID int64) error
 	DeleteInvoiceFeatures(ctx context.Context, invoiceID int64) error
 	DeleteInvoiceHTLC(ctx context.Context, htlcID int64) error
 	DeleteInvoiceHTLCCustomRecords(ctx context.Context, invoiceID int64) error
 	DeleteInvoiceHTLCs(ctx context.Context, invoiceID int64) error
-	FilterInvoicePayments(ctx context.Context, arg FilterInvoicePaymentsParams) ([]FilterInvoicePaymentsRow, error)
+	FetchAMPInvoiceHTLCs(ctx context.Context, arg FetchAMPInvoiceHTLCsParams) ([]FetchAMPInvoiceHTLCsRow, error)
+	FetchAMPInvoices(ctx context.Context, arg FetchAMPInvoicesParams) ([]AmpInvoice, error)
+	FetchSettledAmpInvoices(ctx context.Context, arg FetchSettledAmpInvoicesParams) ([]FetchSettledAmpInvoicesRow, error)
 	FilterInvoices(ctx context.Context, arg FilterInvoicesParams) ([]Invoice, error)
-	GetAMPInvoiceHTLCsByInvoiceID(ctx context.Context, invoiceID int64) ([]AmpInvoiceHtlc, error)
-	GetAMPInvoiceHTLCsBySetID(ctx context.Context, setID []byte) ([]AmpInvoiceHtlc, error)
+	GetAmpInvoiceID(ctx context.Context, setID []byte) (int64, error)
 	// This method may return more than one invoice if filter using multiple fields
 	// from different invoices. It is the caller's responsibility to ensure that
 	// we bubble up an error in those cases.
@@ -29,23 +29,21 @@ type Querier interface {
 	GetInvoiceFeatures(ctx context.Context, invoiceID int64) ([]InvoiceFeature, error)
 	GetInvoiceHTLCCustomRecords(ctx context.Context, invoiceID int64) ([]GetInvoiceHTLCCustomRecordsRow, error)
 	GetInvoiceHTLCs(ctx context.Context, invoiceID int64) ([]InvoiceHtlc, error)
-	GetInvoicePayments(ctx context.Context, invoiceID int64) ([]InvoicePayment, error)
-	GetSetIDHTLCsCustomRecords(ctx context.Context, setID []byte) ([]GetSetIDHTLCsCustomRecordsRow, error)
-	InsertAMPInvoiceHTLC(ctx context.Context, arg InsertAMPInvoiceHTLCParams) error
-	InsertAMPInvoicePayment(ctx context.Context, arg InsertAMPInvoicePaymentParams) error
+	InsertAmpInvoiceHtlc(ctx context.Context, arg InsertAmpInvoiceHtlcParams) error
 	InsertInvoice(ctx context.Context, arg InsertInvoiceParams) (int64, error)
 	InsertInvoiceEvent(ctx context.Context, arg InsertInvoiceEventParams) error
 	InsertInvoiceFeature(ctx context.Context, arg InsertInvoiceFeatureParams) error
-	InsertInvoiceHTLC(ctx context.Context, arg InsertInvoiceHTLCParams) error
+	InsertInvoiceHTLC(ctx context.Context, arg InsertInvoiceHTLCParams) (int64, error)
 	InsertInvoiceHTLCCustomRecord(ctx context.Context, arg InsertInvoiceHTLCCustomRecordParams) error
-	InsertInvoicePayment(ctx context.Context, arg InsertInvoicePaymentParams) (int64, error)
-	SelectAMPInvoicePayments(ctx context.Context, arg SelectAMPInvoicePaymentsParams) ([]SelectAMPInvoicePaymentsRow, error)
+	NextInvoiceSettledIndex(ctx context.Context) (int64, error)
 	SelectInvoiceEvents(ctx context.Context, arg SelectInvoiceEventsParams) ([]InvoiceEvent, error)
-	UpdateAMPInvoiceHTLC(ctx context.Context, arg UpdateAMPInvoiceHTLCParams) error
-	UpdateAMPPayment(ctx context.Context, arg UpdateAMPPaymentParams) error
-	UpdateInvoice(ctx context.Context, arg UpdateInvoiceParams) error
+	UpdateAmpInvoiceHtlcPreimage(ctx context.Context, arg UpdateAmpInvoiceHtlcPreimageParams) (sql.Result, error)
+	UpdateAmpInvoiceState(ctx context.Context, arg UpdateAmpInvoiceStateParams) error
+	UpdateInvoiceAmountPaid(ctx context.Context, arg UpdateInvoiceAmountPaidParams) (sql.Result, error)
 	UpdateInvoiceHTLC(ctx context.Context, arg UpdateInvoiceHTLCParams) error
 	UpdateInvoiceHTLCs(ctx context.Context, arg UpdateInvoiceHTLCsParams) error
+	UpdateInvoiceState(ctx context.Context, arg UpdateInvoiceStateParams) (sql.Result, error)
+	UpsertAmpInvoice(ctx context.Context, arg UpsertAmpInvoiceParams) (sql.Result, error)
 }
 
 var _ Querier = (*Queries)(nil)

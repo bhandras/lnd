@@ -9,28 +9,31 @@ import (
 	"time"
 )
 
+type AmpInvoice struct {
+	SetID        []byte
+	State        int16
+	CreatedAt    time.Time
+	SettledAt    sql.NullTime
+	SettledIndex sql.NullInt64
+	InvoiceID    int64
+}
+
 type AmpInvoiceHtlc struct {
+	InvoiceID  int64
 	SetID      []byte
 	HtlcID     int64
-	InvoiceID  int64
 	RootShare  []byte
 	ChildIndex int64
 	Hash       []byte
 	Preimage   []byte
 }
 
-type AmpInvoicePayment struct {
-	SetID        []byte
-	State        int16
-	CreatedAt    time.Time
-	SettledIndex sql.NullInt64
-	InvoiceID    int64
-}
-
 type Invoice struct {
 	ID             int64
 	Hash           []byte
 	Preimage       []byte
+	SettledIndex   sql.NullInt64
+	SettledAt      sql.NullTime
 	Memo           sql.NullString
 	AmountMsat     int64
 	CltvDelta      sql.NullInt32
@@ -67,8 +70,8 @@ type InvoiceFeature struct {
 
 type InvoiceHtlc struct {
 	ID           int64
-	HtlcID       int64
 	ChanID       string
+	HtlcID       int64
 	AmountMsat   int64
 	TotalMppMsat sql.NullInt64
 	AcceptHeight int32
@@ -85,9 +88,7 @@ type InvoiceHtlcCustomRecord struct {
 	HtlcID int64
 }
 
-type InvoicePayment struct {
-	ID             int64
-	SettledAt      time.Time
-	AmountPaidMsat int64
-	InvoiceID      int64
+type InvoiceSequence struct {
+	Name         string
+	CurrentValue int64
 }
