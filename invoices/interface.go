@@ -6,6 +6,7 @@ import (
 
 	"github.com/lightningnetwork/lnd/channeldb/models"
 	"github.com/lightningnetwork/lnd/lntypes"
+	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/record"
 )
 
@@ -163,3 +164,32 @@ type InvoiceSlice struct {
 // CircuitKey is a tuple of channel ID and HTLC ID, used to uniquely identify
 // HTLCs in a circuit.
 type CircuitKey = models.CircuitKey
+
+// InvoiceUpdater is an interface to abstract away the details of updating an
+// invoice in the database. The methods of this interface are called during the
+// in-memory update of an invoice when the database needs to be updated or the
+// updated state needs to be marked as needing to be written to the database.
+type InvoiceUpdater interface {
+	AddHtlc(circuitKey CircuitKey, newHtlc *InvoiceHTLC) error
+
+	ResolveHtlc(circuitKey CircuitKey, state HtlcState,
+		resolveTime time.Time) error
+
+	AddAmpHtlcPreimage(setID [32]byte, circuitKey CircuitKey,
+		preimage lntypes.Preimage) error
+
+	UpdateInvoiceState(newState ContractState,
+		preimage *lntypes.Preimage) error
+
+	UpdateInvoiceAmtPaid(amtPaid lnwire.MilliSatoshi) error
+
+	UpdateAmpState(setID [32]byte, newState InvoiceStateAMP) error
+
+	AcceptHtlcAmp(setID [32]byte, circuitKey CircuitKey) error
+
+	SettleHtlcAmp(setID [32]byte, circuitKey CircuitKey) error
+
+	CancelHtlcAmp(setID [32]byte, circuitKey CircuitKey) error
+
+	Commit(updateType UpdateType) error
+}
