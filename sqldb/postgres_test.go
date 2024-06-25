@@ -9,5 +9,25 @@ import (
 
 // NewTestDB is a helper function that creates a Postgres database for testing.
 func NewTestDB(t *testing.T) *PostgresStore {
-	return NewTestPostgresDB(t)
+	pgFixture := sqldb.NewTestPgFixture(
+		t, sqldb.DefaultPostgresFixtureLifetime,
+	)
+	t.Cleanup(func() {
+		pgFixture.TearDown(t)
+	})
+
+	return NewTestPostgresDB(t, pgFixture)
+}
+
+// NewTestDBWithVersion is a helper function that creates a Postgres database
+// for testing and migrates it to the given version.
+func NewTestDBWithVersion(t *testing.T, version uint) *PostgresStore {
+	pgFixture := sqldb.NewTestPgFixture(
+		t, sqldb.DefaultPostgresFixtureLifetime,
+	)
+	t.Cleanup(func() {
+		pgFixture.TearDown(t)
+	})
+
+	return NewTestPostgresDBWithVersion(t, pgFixture, version)
 }
