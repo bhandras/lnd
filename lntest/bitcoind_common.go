@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/rpcclient"
 	"github.com/lightningnetwork/lnd/lntest/node"
 	"github.com/lightningnetwork/lnd/lntest/port"
@@ -68,6 +69,10 @@ func (b BitcoindBackendConfig) GenArgs() []string {
 // ConnectMiner is called to establish a connection to the test miner.
 func (b BitcoindBackendConfig) ConnectMiner() error {
 	return b.rpcClient.AddNode(b.minerAddr, rpcclient.ANAdd)
+}
+
+func (b BitcoindBackendConfig) InvalidateBlock(blockHash chainhash.Hash) error {
+	return b.rpcClient.InvalidateBlock(&blockHash)
 }
 
 // DisconnectMiner is called to disconnect the miner.

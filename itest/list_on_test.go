@@ -43,6 +43,10 @@ var allTestCases = []*lntest.TestCase{
 		TestFunc: testSendSelectedCoins,
 	},
 	{
+		Name:     "debug reorg",
+		TestFunc: testReorg,
+	},
+	{
 		Name:     "send selected coins channel reserve",
 		TestFunc: testSendSelectedCoinsChannelReserve,
 	},

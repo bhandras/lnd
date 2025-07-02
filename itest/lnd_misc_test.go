@@ -4,8 +4,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/btcsuite/btcd/btcutil"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcwallet/wallet"
@@ -13,6 +15,7 @@ import (
 	"github.com/lightningnetwork/lnd/input"
 	"github.com/lightningnetwork/lnd/lncfg"
 	"github.com/lightningnetwork/lnd/lnrpc"
+	"github.com/lightningnetwork/lnd/lnrpc/chainrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/invoicesrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/walletrpc"
@@ -1343,4 +1346,81 @@ func testSendSelectedCoinsChannelReserve(ht *lntest.HarnessTest) {
 
 	// Alice should have one reserved UTXO now.
 	ht.AssertNumUTXOs(alice, 1)
+}
+
+func testReorg(ht *lntest.HarnessTest) {
+	if ht.ChainBackendName() != "bitcoind" {
+		ht.Skipf("skipping reorg test, only supported with bitcoind")
+	}
+
+	alice := ht.NewNode("Alice", nil)
+	bitcoinBackend, ok := alice.Cfg.BackendCfg.(*lntest.BitcoindBackendConfig)
+	require.True(ht, ok, "expected BitcoindBackendConfig")
+
+	ht.FundCoins(btcutil.SatoshiPerBitcoin, alice)
+
+	addr := ht.NewMinerAddress()
+	alice.RPC.SendCoins(&lnrpc.SendCoinsRequest{
+		Addr:    addr.String(),
+		SendAll: true,
+	})
+
+	addrPkScript, err := txscript.PayToAddrScript(addr)
+	require.NoError(ht, err)
+
+	tx := ht.GetNumTxsFromMempool(1)[0]
+	txID := tx.TxHash()
+
+	currentHeight := ht.CurrentHeight()
+	req := &chainrpc.ConfRequest{
+		Script:       addrPkScript,
+		Txid:         txID[:],
+		HeightHint:   currentHeight,
+		NumConfs:     1,
+		IncludeBlock: true,
+	}
+	confClient := alice.RPC.RegisterConfirmationsNtfn(req)
+
+	ht.MineBlocksAndAssertNumTxes(1, 1)
+
+	info := alice.RPC.GetInfo()
+	confEvent, err := confClient.Recv()
+	require.NoError(ht, err)
+
+	confDetails := confEvent.GetConf()
+	require.NotNil(ht, confDetails, "expected ConfEvent_Conf event")
+
+	blockHash, err := chainhash.NewHashFromStr(info.BlockHash)
+	require.NoError(ht, err)
+
+	err = ht.Miner().Client.InvalidateBlock(blockHash)
+	require.NoError(ht, err, "failed to invalidate block")
+
+	err = bitcoinBackend.InvalidateBlock(*blockHash)
+	require.NoError(ht, err, "failed to invalidate block on Alice's backend")
+
+	ht.Logf("Invalidated block %s", blockHash)
+	ht.MineEmptyBlocks(1)
+
+	reorgChan := make(chan struct{})
+	go func() {
+		confEvent, err = confClient.Recv()
+		require.NoError(ht, err)
+
+		reorgDetails := confEvent.GetReorg()
+		require.NotNil(ht, reorgDetails, "expected ConfEvent_Reorg event")
+
+		ht.Logf("Reorg detected")
+
+		close(reorgChan)
+	}()
+
+	select {
+	case <-reorgChan:
+	case <-time.After(defaultTimeout):
+		require.Fail(ht, "timeout waiting for reorg event")
+	}
+
+	// Now clean the mempool.
+	ht.MineBlocksAndAssertNumTxes(1, 1)
 }
