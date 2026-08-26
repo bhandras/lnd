@@ -1693,6 +1693,11 @@
           "type": "string",
           "format": "uint64",
           "description": "If set, then the inputs in the funded PSBT will be locked for the\nspecified duration. The lock duration is specified in seconds. If not\nset, the default lock duration will be used."
+        },
+        "input_release_after_spend_confs": {
+          "type": "integer",
+          "format": "int64",
+          "description": "Keep each acquired input lease until its spending transaction reaches\nthis confirmation count. A reorganization resets maturity progress."
         }
       }
     },
@@ -1894,6 +1899,11 @@
           "type": "string",
           "format": "uint64",
           "description": "The time in seconds before the lock expires. If set to zero, the default\nlock duration is used."
+        },
+        "release_after_spend_confs": {
+          "type": "integer",
+          "format": "int64",
+          "description": "Keep the lease until the transaction spending the output reaches this\nconfirmation count. A reorganization that disconnects the spending block\nresets maturity progress. Zero preserves the default lease behavior."
         }
       }
     },
@@ -1904,6 +1914,11 @@
           "type": "string",
           "format": "uint64",
           "description": "The absolute expiration of the output lease represented as a unix timestamp."
+        },
+        "release_after_spend_confs": {
+          "type": "integer",
+          "format": "int64",
+          "description": "The spend maturity confirmation count accepted for this lease."
         }
       }
     },
@@ -2408,6 +2423,11 @@
           "type": "string",
           "format": "uint64",
           "description": "The value of the leased output in satoshis."
+        },
+        "release_after_spend_confs": {
+          "type": "integer",
+          "format": "int64",
+          "description": "The spend maturity confirmation count applied to this lease."
         }
       }
     },

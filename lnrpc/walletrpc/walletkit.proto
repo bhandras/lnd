@@ -467,6 +467,11 @@ message LeaseOutputRequest {
     // The time in seconds before the lock expires. If set to zero, the default
     // lock duration is used.
     uint64 expiration_seconds = 3;
+
+    // Keep the lease until the transaction spending the output reaches this
+    // confirmation count. A reorganization that disconnects the spending block
+    // resets maturity progress. Zero preserves the default lease behavior.
+    uint32 release_after_spend_confs = 4;
 }
 
 message LeaseOutputResponse {
@@ -474,6 +479,9 @@ message LeaseOutputResponse {
     The absolute expiration of the output lease represented as a unix timestamp.
     */
     uint64 expiration = 1;
+
+    // The spend maturity confirmation count accepted for this lease.
+    uint32 release_after_spend_confs = 2;
 }
 
 message ReleaseOutputRequest {
@@ -1649,6 +1657,10 @@ message FundPsbtRequest {
     // specified duration. The lock duration is specified in seconds. If not
     // set, the default lock duration will be used.
     uint64 lock_expiration_seconds = 14;
+
+    // Keep each acquired input lease until its spending transaction reaches
+    // this confirmation count. A reorganization resets maturity progress.
+    uint32 input_release_after_spend_confs = 15;
 }
 message FundPsbtResponse {
     /*
@@ -1742,6 +1754,9 @@ message UtxoLease {
     The value of the leased output in satoshis.
     */
     uint64 value = 5;
+
+    // The spend maturity confirmation count applied to this lease.
+    uint32 release_after_spend_confs = 6;
 }
 
 message SignPsbtRequest {

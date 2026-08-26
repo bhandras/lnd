@@ -45,7 +45,8 @@ func verifyInputsUnspent(inputs []*wire.TxIn, utxos []*lnwallet.Utxo) error {
 // (the passed outpoints), using either the optional custom lock ID and duration
 // or the wallet's internal static lock ID with the default 10-minute duration.
 func lockInputs(w lnwallet.WalletController, outpoints []wire.OutPoint,
-	customLockID *wtxmgr.LockID, customLockDuration time.Duration) (
+	customLockID *wtxmgr.LockID, customLockDuration time.Duration,
+	releaseAfterSpendConfs uint32) (
 	[]*base.ListLeasedOutputResult, error) {
 
 	locks := make(
@@ -74,9 +75,29 @@ func lockInputs(w lnwallet.WalletController, outpoints []wire.OutPoint,
 			return nil, fmt.Errorf("fetch outpoint info: %w", err)
 		}
 
-		expiration, err := w.LeaseOutput(
-			lock.LockID, lock.Outpoint, lockDuration,
-		)
+		var expiration time.Time
+		if releaseAfterSpendConfs > 0 {
+			leaser, ok := w.(lnwallet.OutputLeaserWithOptions)
+			if !ok {
+				return nil, fmt.Errorf(
+					"wallet does not support " +
+						"release-after-spend " +
+						"output leases",
+				)
+			}
+
+			leaseOpts := lnwallet.LeaseOutputOptions{
+				ReleaseAfterSpendConfs: releaseAfterSpendConfs,
+			}
+			expiration, err = leaser.LeaseOutputWithOptions(
+				lock.LockID, lock.Outpoint, lockDuration,
+				leaseOpts,
+			)
+		} else {
+			expiration, err = w.LeaseOutput(
+				lock.LockID, lock.Outpoint, lockDuration,
+			)
+		}
 		if err != nil {
 			// If we run into a problem with locking one output, we
 			// should try to unlock those that we successfully
@@ -85,7 +106,7 @@ func lockInputs(w lnwallet.WalletController, outpoints []wire.OutPoint,
 			for i := 0; i < idx; i++ {
 				op := locks[i].Outpoint
 				if err := w.ReleaseOutput(
-					chanfunding.LndInternalLockID, op,
+					locks[i].LockID, op,
 				); err != nil {
 					log.Errorf("could not release the "+
 						"lock on %v: %v", op, err)

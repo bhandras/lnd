@@ -557,8 +557,12 @@ type LeaseOutputRequest struct {
 	// The time in seconds before the lock expires. If set to zero, the default
 	// lock duration is used.
 	ExpirationSeconds uint64 `protobuf:"varint,3,opt,name=expiration_seconds,json=expirationSeconds,proto3" json:"expiration_seconds,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Keep the lease until the transaction spending the output reaches this
+	// confirmation count. A reorganization that disconnects the spending block
+	// resets maturity progress. Zero preserves the default lease behavior.
+	ReleaseAfterSpendConfs uint32 `protobuf:"varint,4,opt,name=release_after_spend_confs,json=releaseAfterSpendConfs,proto3" json:"release_after_spend_confs,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *LeaseOutputRequest) Reset() {
@@ -612,12 +616,21 @@ func (x *LeaseOutputRequest) GetExpirationSeconds() uint64 {
 	return 0
 }
 
+func (x *LeaseOutputRequest) GetReleaseAfterSpendConfs() uint32 {
+	if x != nil {
+		return x.ReleaseAfterSpendConfs
+	}
+	return 0
+}
+
 type LeaseOutputResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The absolute expiration of the output lease represented as a unix timestamp.
-	Expiration    uint64 `protobuf:"varint,1,opt,name=expiration,proto3" json:"expiration,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Expiration uint64 `protobuf:"varint,1,opt,name=expiration,proto3" json:"expiration,omitempty"`
+	// The spend maturity confirmation count accepted for this lease.
+	ReleaseAfterSpendConfs uint32 `protobuf:"varint,2,opt,name=release_after_spend_confs,json=releaseAfterSpendConfs,proto3" json:"release_after_spend_confs,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *LeaseOutputResponse) Reset() {
@@ -653,6 +666,13 @@ func (*LeaseOutputResponse) Descriptor() ([]byte, []int) {
 func (x *LeaseOutputResponse) GetExpiration() uint64 {
 	if x != nil {
 		return x.Expiration
+	}
+	return 0
+}
+
+func (x *LeaseOutputResponse) GetReleaseAfterSpendConfs() uint32 {
+	if x != nil {
+		return x.ReleaseAfterSpendConfs
 	}
 	return 0
 }
@@ -3948,8 +3968,11 @@ type FundPsbtRequest struct {
 	// specified duration. The lock duration is specified in seconds. If not
 	// set, the default lock duration will be used.
 	LockExpirationSeconds uint64 `protobuf:"varint,14,opt,name=lock_expiration_seconds,json=lockExpirationSeconds,proto3" json:"lock_expiration_seconds,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	// Keep each acquired input lease until its spending transaction reaches
+	// this confirmation count. A reorganization resets maturity progress.
+	InputReleaseAfterSpendConfs uint32 `protobuf:"varint,15,opt,name=input_release_after_spend_confs,json=inputReleaseAfterSpendConfs,proto3" json:"input_release_after_spend_confs,omitempty"`
+	unknownFields               protoimpl.UnknownFields
+	sizeCache                   protoimpl.SizeCache
 }
 
 func (x *FundPsbtRequest) Reset() {
@@ -4102,6 +4125,13 @@ func (x *FundPsbtRequest) GetCustomLockId() []byte {
 func (x *FundPsbtRequest) GetLockExpirationSeconds() uint64 {
 	if x != nil {
 		return x.LockExpirationSeconds
+	}
+	return 0
+}
+
+func (x *FundPsbtRequest) GetInputReleaseAfterSpendConfs() uint32 {
+	if x != nil {
+		return x.InputReleaseAfterSpendConfs
 	}
 	return 0
 }
@@ -4422,9 +4452,11 @@ type UtxoLease struct {
 	// The public key script of the leased output.
 	PkScript []byte `protobuf:"bytes,4,opt,name=pk_script,json=pkScript,proto3" json:"pk_script,omitempty"`
 	// The value of the leased output in satoshis.
-	Value         uint64 `protobuf:"varint,5,opt,name=value,proto3" json:"value,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Value uint64 `protobuf:"varint,5,opt,name=value,proto3" json:"value,omitempty"`
+	// The spend maturity confirmation count applied to this lease.
+	ReleaseAfterSpendConfs uint32 `protobuf:"varint,6,opt,name=release_after_spend_confs,json=releaseAfterSpendConfs,proto3" json:"release_after_spend_confs,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *UtxoLease) Reset() {
@@ -4488,6 +4520,13 @@ func (x *UtxoLease) GetPkScript() []byte {
 func (x *UtxoLease) GetValue() uint64 {
 	if x != nil {
 		return x.Value
+	}
+	return 0
+}
+
+func (x *UtxoLease) GetReleaseAfterSpendConfs() uint32 {
+	if x != nil {
+		return x.ReleaseAfterSpendConfs
 	}
 	return 0
 }
@@ -4842,15 +4881,17 @@ const file_walletrpc_walletkit_proto_rawDesc = "" +
 	"\aaccount\x18\x03 \x01(\tR\aaccount\x12)\n" +
 	"\x10unconfirmed_only\x18\x04 \x01(\bR\x0funconfirmedOnly\"8\n" +
 	"\x13ListUnspentResponse\x12!\n" +
-	"\x05utxos\x18\x01 \x03(\v2\v.lnrpc.UtxoR\x05utxos\"\x80\x01\n" +
+	"\x05utxos\x18\x01 \x03(\v2\v.lnrpc.UtxoR\x05utxos\"\xbb\x01\n" +
 	"\x12LeaseOutputRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\fR\x02id\x12+\n" +
 	"\boutpoint\x18\x02 \x01(\v2\x0f.lnrpc.OutPointR\boutpoint\x12-\n" +
-	"\x12expiration_seconds\x18\x03 \x01(\x04R\x11expirationSeconds\"5\n" +
+	"\x12expiration_seconds\x18\x03 \x01(\x04R\x11expirationSeconds\x129\n" +
+	"\x19release_after_spend_confs\x18\x04 \x01(\rR\x16releaseAfterSpendConfs\"p\n" +
 	"\x13LeaseOutputResponse\x12\x1e\n" +
 	"\n" +
 	"expiration\x18\x01 \x01(\x04R\n" +
-	"expiration\"S\n" +
+	"expiration\x129\n" +
+	"\x19release_after_spend_confs\x18\x02 \x01(\rR\x16releaseAfterSpendConfs\"S\n" +
 	"\x14ReleaseOutputRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\fR\x02id\x12+\n" +
 	"\boutpoint\x18\x02 \x01(\v2\x0f.lnrpc.OutPointR\boutpoint\"/\n" +
@@ -5059,7 +5100,7 @@ const file_walletrpc_walletkit_proto_rawDesc = "" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x12\x1c\n" +
 	"\toverwrite\x18\x03 \x01(\bR\toverwrite\"2\n" +
 	"\x18LabelTransactionResponse\x12\x16\n" +
-	"\x06status\x18\x01 \x01(\tR\x06status\"\x88\x05\n" +
+	"\x06status\x18\x01 \x01(\tR\x06status\"\xce\x05\n" +
 	"\x0fFundPsbtRequest\x12\x14\n" +
 	"\x04psbt\x18\x01 \x01(\fH\x00R\x04psbt\x12)\n" +
 	"\x03raw\x18\x02 \x01(\v2\x15.walletrpc.TxTemplateH\x00R\x03raw\x12<\n" +
@@ -5079,7 +5120,8 @@ const file_walletrpc_walletkit_proto_rawDesc = "" +
 	" \x01(\x0e2\x1c.lnrpc.CoinSelectionStrategyR\x15coinSelectionStrategy\x12\"\n" +
 	"\rmax_fee_ratio\x18\f \x01(\x01R\vmaxFeeRatio\x12$\n" +
 	"\x0ecustom_lock_id\x18\r \x01(\fR\fcustomLockId\x126\n" +
-	"\x17lock_expiration_seconds\x18\x0e \x01(\x04R\x15lockExpirationSecondsB\n" +
+	"\x17lock_expiration_seconds\x18\x0e \x01(\x04R\x15lockExpirationSeconds\x12D\n" +
+	"\x1finput_release_after_spend_confs\x18\x0f \x01(\rR\x1binputReleaseAfterSpendConfsB\n" +
 	"\n" +
 	"\btemplateB\x06\n" +
 	"\x04fees\"\x9c\x01\n" +
@@ -5099,7 +5141,7 @@ const file_walletrpc_walletkit_proto_rawDesc = "" +
 	"\x04psbt\x18\x01 \x01(\fR\x04psbt\x124\n" +
 	"\x15existing_output_index\x18\x02 \x01(\x05H\x00R\x13existingOutputIndex\x12\x12\n" +
 	"\x03add\x18\x03 \x01(\bH\x00R\x03addB\x0f\n" +
-	"\rchange_output\"\x9b\x01\n" +
+	"\rchange_output\"\xd6\x01\n" +
 	"\tUtxoLease\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\fR\x02id\x12+\n" +
 	"\boutpoint\x18\x02 \x01(\v2\x0f.lnrpc.OutPointR\boutpoint\x12\x1e\n" +
@@ -5107,7 +5149,8 @@ const file_walletrpc_walletkit_proto_rawDesc = "" +
 	"expiration\x18\x03 \x01(\x04R\n" +
 	"expiration\x12\x1b\n" +
 	"\tpk_script\x18\x04 \x01(\fR\bpkScript\x12\x14\n" +
-	"\x05value\x18\x05 \x01(\x04R\x05value\"2\n" +
+	"\x05value\x18\x05 \x01(\x04R\x05value\x129\n" +
+	"\x19release_after_spend_confs\x18\x06 \x01(\rR\x16releaseAfterSpendConfs\"2\n" +
 	"\x0fSignPsbtRequest\x12\x1f\n" +
 	"\vfunded_psbt\x18\x01 \x01(\fR\n" +
 	"fundedPsbt\"X\n" +

@@ -510,14 +510,32 @@ func (w *WalletKit) LeaseOutput(ctx context.Context,
 	if req.ExpirationSeconds != 0 {
 		duration = time.Duration(req.ExpirationSeconds) * time.Second
 	}
+	releaseAfterSpendConfs := req.ReleaseAfterSpendConfs
 
 	// Acquire the global coin selection lock to ensure there aren't any
 	// other concurrent processes attempting to lease the same UTXO.
 	var expiration time.Time
 	err = w.cfg.CoinSelectionLocker.WithCoinSelectLock(func() error {
-		expiration, err = w.cfg.Wallet.LeaseOutput(
-			lockID, *op, duration,
-		)
+		if releaseAfterSpendConfs > 0 {
+			wallet := w.cfg.Wallet
+			leaser, ok := wallet.(lnwallet.OutputLeaserWithOptions)
+			if !ok {
+				return fmt.Errorf("wallet does not support " +
+					"release-after-spend output leases")
+			}
+
+			leaseOpts := lnwallet.LeaseOutputOptions{
+				ReleaseAfterSpendConfs: releaseAfterSpendConfs,
+			}
+			expiration, err = leaser.LeaseOutputWithOptions(
+				lockID, *op, duration, leaseOpts,
+			)
+		} else {
+			expiration, err = w.cfg.Wallet.LeaseOutput(
+				lockID, *op, duration,
+			)
+		}
+
 		return err
 	})
 	if err != nil {
@@ -525,7 +543,8 @@ func (w *WalletKit) LeaseOutput(ctx context.Context,
 	}
 
 	return &LeaseOutputResponse{
-		Expiration: uint64(expiration.Unix()),
+		Expiration:             uint64(expiration.Unix()),
+		ReleaseAfterSpendConfs: releaseAfterSpendConfs,
 	}, nil
 }
 
@@ -1736,6 +1755,7 @@ func (w *WalletKit) FundPsbt(_ context.Context,
 			account, keyScopeFromChangeAddressType(req.ChangeType),
 			packet, minConfs, feeSatPerKW, coinSelectionStrategy,
 			customLockID, customLockDuration,
+			req.InputReleaseAfterSpendConfs,
 		)
 
 	// The template is specified as a PSBT with the intention to perform
@@ -1819,6 +1839,7 @@ func (w *WalletKit) FundPsbt(_ context.Context,
 			account, changeIndex, packet, minConfs, changeType,
 			feeSatPerKW, coinSelectionStrategy, maxFeeRatio,
 			customLockID, customLockDuration,
+			req.InputReleaseAfterSpendConfs,
 		)
 
 	// The template is specified as a RPC message. We need to create a new
@@ -1877,6 +1898,7 @@ func (w *WalletKit) FundPsbt(_ context.Context,
 			account, keyScopeFromChangeAddressType(req.ChangeType),
 			packet, minConfs, feeSatPerKW, coinSelectionStrategy,
 			customLockID, customLockDuration,
+			req.InputReleaseAfterSpendConfs,
 		)
 
 	default:
@@ -1890,7 +1912,8 @@ func (w *WalletKit) FundPsbt(_ context.Context,
 func (w *WalletKit) fundPsbtInternalWallet(account string,
 	keyScope *waddrmgr.KeyScope, packet *psbt.Packet, minConfs int32,
 	feeSatPerKW chainfee.SatPerKWeight, strategy base.CoinSelectionStrategy,
-	customLockID *wtxmgr.LockID, customLockDuration time.Duration) (
+	customLockID *wtxmgr.LockID, customLockDuration time.Duration,
+	releaseAfterSpendConfs uint32) (
 	*FundPsbtResponse, error) {
 
 	// The RPC parsing part is now over. Several of the following operations
@@ -2006,7 +2029,7 @@ func (w *WalletKit) fundPsbtInternalWallet(account string,
 
 		response, err = w.lockAndCreateFundingResponse(
 			packet, outpoints, changeIndex, customLockID,
-			customLockDuration,
+			customLockDuration, releaseAfterSpendConfs,
 		)
 
 		return err
@@ -2026,7 +2049,8 @@ func (w *WalletKit) fundPsbtCoinSelect(account string, changeIndex int32,
 	changeType chanfunding.ChangeAddressType,
 	feeRate chainfee.SatPerKWeight, strategy base.CoinSelectionStrategy,
 	maxFeeRatio float64, customLockID *wtxmgr.LockID,
-	customLockDuration time.Duration) (*FundPsbtResponse, error) {
+	customLockDuration time.Duration, releaseAfterSpendConfs uint32) (
+	*FundPsbtResponse, error) {
 
 	// We want to make sure we don't select any inputs that are already
 	// specified in the template. To do that, we require those inputs to
@@ -2143,7 +2167,7 @@ func (w *WalletKit) fundPsbtCoinSelect(account string, changeIndex int32,
 		// We're done. Let's serialize and return the updated package.
 		return w.lockAndCreateFundingResponse(
 			packet, nil, changeIndex, customLockID,
-			customLockDuration,
+			customLockDuration, releaseAfterSpendConfs,
 		)
 	}
 
@@ -2217,7 +2241,7 @@ func (w *WalletKit) fundPsbtCoinSelect(account string, changeIndex int32,
 
 		response, err = w.lockAndCreateFundingResponse(
 			packet, addedOutpoints, changeIndex, customLockID,
-			customLockDuration,
+			customLockDuration, releaseAfterSpendConfs,
 		)
 
 		return err
@@ -2263,7 +2287,8 @@ func (w *WalletKit) assertNotAvailable(inputs []*wire.TxIn, minConfs int32,
 // response with the serialized PSBT, the change index and the locked UTXOs.
 func (w *WalletKit) lockAndCreateFundingResponse(packet *psbt.Packet,
 	newOutpoints []wire.OutPoint, changeIndex int32,
-	customLockID *wtxmgr.LockID, customLockDuration time.Duration) (
+	customLockID *wtxmgr.LockID, customLockDuration time.Duration,
+	releaseAfterSpendConfs uint32) (
 	*FundPsbtResponse, error) {
 
 	// Make sure we can properly serialize the packet. If this goes wrong
@@ -2277,6 +2302,7 @@ func (w *WalletKit) lockAndCreateFundingResponse(packet *psbt.Packet,
 
 	locks, err := lockInputs(
 		w.cfg.Wallet, newOutpoints, customLockID, customLockDuration,
+		releaseAfterSpendConfs,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("could not lock inputs: %w", err)
@@ -2284,6 +2310,9 @@ func (w *WalletKit) lockAndCreateFundingResponse(packet *psbt.Packet,
 
 	// Convert the lock leases to the RPC format.
 	rpcLocks := marshallLeases(locks)
+	for _, lock := range rpcLocks {
+		lock.ReleaseAfterSpendConfs = releaseAfterSpendConfs
+	}
 
 	return &FundPsbtResponse{
 		FundedPsbt:        buf.Bytes(),
@@ -2367,11 +2396,14 @@ func marshallLeases(locks []*base.ListLeasedOutputResult) []*UtxoLease {
 	for idx, lock := range locks {
 
 		rpcLocks[idx] = &UtxoLease{
-			Id:         lock.LockID[:],
-			Outpoint:   lnrpc.MarshalOutPoint(&lock.Outpoint),
-			Expiration: uint64(lock.Expiration.Unix()),
-			PkScript:   lock.PkScript,
-			Value:      uint64(lock.Value),
+			Id: lock.LockID[:],
+			Outpoint: lnrpc.MarshalOutPoint(
+				&lock.Outpoint,
+			),
+			Expiration:             uint64(lock.Expiration.Unix()),
+			PkScript:               lock.PkScript,
+			Value:                  uint64(lock.Value),
+			ReleaseAfterSpendConfs: lock.ReleaseAfterSpendConfs,
 		}
 	}
 
