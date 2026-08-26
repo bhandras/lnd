@@ -61,6 +61,12 @@
 
 ## RPC Additions
 
+* WalletKit output leases can now [remain active until their spending
+  transaction reaches a requested confirmation
+  depth](https://github.com/lightningnetwork/lnd/pull/11125). The option is
+  available on both `LeaseOutput` and inputs selected by `FundPsbt`; a zero
+  depth preserves the existing wall-clock behavior.
+
 * The `routerrpc.EstimateRouteFee` RPC now supports [restricting fee estimates
   to specific first-hop outgoing
   channels](https://github.com/lightningnetwork/lnd/pull/10501) via the new
@@ -163,6 +169,7 @@
 
 # Contributors (Alphabetical Order)
 
+* Andras Banki-Horvath
 * bitromortac
 * Boris Nagaev
 * Erick Cestari
