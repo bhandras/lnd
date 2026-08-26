@@ -1,5 +1,10 @@
 module github.com/lightningnetwork/lnd
 
+// TODO: drop these replaces after the btcwallet and wtxmgr changes are released.
+replace github.com/btcsuite/btcwallet => github.com/bhandras/btcwallet v0.11.1-0.20260826103350-2146fd732eb2
+
+replace github.com/btcsuite/btcwallet/wtxmgr => github.com/bhandras/btcwallet/wtxmgr v1.0.1-0.20260826100206-9f3be588589b
+
 require (
 	github.com/NebulousLabs/go-upnp v0.0.0-20180202185039-29b680b06c82
 	github.com/Yawning/aez v0.0.0-20211027044916-e49e68abd344
