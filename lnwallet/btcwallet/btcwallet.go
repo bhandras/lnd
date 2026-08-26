@@ -1144,13 +1144,36 @@ func (b *BtcWallet) CreateSimpleTx(inputs fn.Set[wire.OutPoint],
 func (b *BtcWallet) LeaseOutput(id wtxmgr.LockID, op wire.OutPoint,
 	duration time.Duration) (time.Time, error) {
 
+	return b.LeaseOutputWithOptions(
+		id, op, duration, lnwallet.LeaseOutputOptions{},
+	)
+}
+
+// LeaseOutputWithOptions locks an output and applies optional persisted lease
+// behavior supported by btcwallet.
+func (b *BtcWallet) LeaseOutputWithOptions(id wtxmgr.LockID,
+	op wire.OutPoint, duration time.Duration,
+	opts lnwallet.LeaseOutputOptions) (time.Time, error) {
+
 	// Make sure we don't attempt to double lock an output that's been
 	// locked by the in-memory implementation.
 	if b.wallet.LockedOutpoint(op) {
 		return time.Time{}, wtxmgr.ErrOutputAlreadyLocked
 	}
 
-	lockedUntil, err := b.wallet.LeaseOutput(id, op, duration)
+	var lockOpts []wtxmgr.LockOutputOption
+	if opts.ReleaseAfterSpendConfs > 0 {
+		lockOpts = append(
+			lockOpts,
+			wtxmgr.WithReleaseAfterSpend(
+				opts.ReleaseAfterSpendConfs,
+			),
+		)
+	}
+
+	lockedUntil, err := b.wallet.LeaseOutputWithOptions(
+		id, op, duration, lockOpts...,
+	)
 	if err != nil {
 		return time.Time{}, err
 	}

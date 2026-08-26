@@ -9,6 +9,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/btcsuite/btcd/address/v2"
 	"github.com/btcsuite/btcd/blockchain"
@@ -22,6 +23,7 @@ import (
 	"github.com/btcsuite/btcd/txscript/v2"
 	"github.com/btcsuite/btcd/wire/v2"
 	"github.com/btcsuite/btcwallet/wallet"
+	"github.com/btcsuite/btcwallet/wtxmgr"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/chanstate"
 	"github.com/lightningnetwork/lnd/fn/v2"
@@ -632,6 +634,23 @@ func (l *LightningWallet) LockedOutpoints() []*wire.OutPoint {
 	}
 
 	return outPoints
+}
+
+// LeaseOutputWithOptions forwards optional lease semantics through the
+// LightningWallet wrapper to the concrete wallet controller.
+func (l *LightningWallet) LeaseOutputWithOptions(id wtxmgr.LockID,
+	op wire.OutPoint, duration time.Duration,
+	opts LeaseOutputOptions) (time.Time, error) {
+
+	leaser, ok := l.WalletController.(OutputLeaserWithOptions)
+	if !ok {
+		return time.Time{}, fmt.Errorf(
+			"wallet controller does not support " +
+				"output lease options",
+		)
+	}
+
+	return leaser.LeaseOutputWithOptions(id, op, duration, opts)
 }
 
 // ResetReservations reset the volatile wallet state which tracks all currently

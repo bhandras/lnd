@@ -221,6 +221,23 @@ type TransactionSubscription interface {
 	Cancel()
 }
 
+// LeaseOutputOptions controls optional output lease behavior.
+type LeaseOutputOptions struct {
+	// ReleaseAfterSpendConfs keeps the persisted lease until the
+	// transaction spending the output reaches this confirmation count.
+	// Reorganizations reset maturity progress when they disconnect the
+	// spending block.
+	ReleaseAfterSpendConfs uint32
+}
+
+// OutputLeaserWithOptions is an optional wallet capability for callers that
+// require output lease behavior beyond the default WalletController contract.
+type OutputLeaserWithOptions interface {
+	LeaseOutputWithOptions(id wtxmgr.LockID, op wire.OutPoint,
+		duration time.Duration, opts LeaseOutputOptions) (
+		time.Time, error)
+}
+
 // WalletController defines an abstract interface for controlling a local Pure
 // Go wallet, a local or remote wallet via an RPC mechanism, or possibly even
 // a daemon assisted hardware wallet. This interface serves the purpose of
