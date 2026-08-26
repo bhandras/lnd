@@ -71,3 +71,23 @@ func TestLockInputsForwardsReleaseAfterSpend(t *testing.T) {
 		require.Equal(t, uint32(6), opts.ReleaseAfterSpendConfs)
 	}
 }
+
+// TestLockInputsRollbackUsesActualLockID verifies that a later lease failure
+// releases earlier inputs with the ID that acquired them.
+func TestLockInputsRollbackUsesActualLockID(t *testing.T) {
+	t.Parallel()
+
+	wallet := &leaseOptionsWallet{
+		WalletController: &mock.WalletController{},
+		failCall:         2,
+	}
+	lockID := wtxmgr.LockID{9, 8, 7}
+	outpoints := []wire.OutPoint{
+		{Index: 1},
+		{Index: 2},
+	}
+
+	_, err := lockInputs(wallet, outpoints, &lockID, time.Hour, 6)
+	require.ErrorContains(t, err, "lease failed")
+	require.Equal(t, []wtxmgr.LockID{lockID}, wallet.releasedIDs)
+}
