@@ -18,6 +18,7 @@ import (
 	"github.com/btcsuite/btcd/wire/v2"
 	"github.com/btcsuite/btcwallet/wallet"
 	"github.com/lightningnetwork/lnd/input"
+	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntest/mock"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwallet/chainfee"
@@ -76,6 +77,36 @@ func (m *mockCoinSelectionLocker) WithCoinSelectLock(f func() error) error {
 	}
 
 	return nil
+}
+
+// TestLeaseOutputRejectsUnsupportedOptions verifies WalletKit does not
+// silently downgrade an option-bearing request to a time-only lease.
+func TestLeaseOutputRejectsUnsupportedOptions(t *testing.T) {
+	t.Parallel()
+
+	wallet := &legacyLeaseWallet{
+		WalletController: &mock.WalletController{},
+	}
+	rpcServer, _, err := New(&Config{
+		Wallet:              wallet,
+		CoinSelectionLocker: &mockCoinSelectionLocker{},
+	})
+	require.NoError(t, err)
+
+	_, err = rpcServer.LeaseOutput(t.Context(), &LeaseOutputRequest{
+		Id: bytes.Repeat([]byte{1}, 32),
+		Outpoint: &lnrpc.OutPoint{
+			TxidBytes:   make([]byte, 32),
+			OutputIndex: 1,
+		},
+		ExpirationSeconds:      60,
+		ReleaseAfterSpendConfs: 6,
+	})
+	require.ErrorContains(
+		t, err, "wallet does not support release-after-spend output leases",
+	)
+	require.Zero(t, wallet.leaseCalls,
+		"unsupported options must not create a shorter legacy lease")
 }
 
 // TestFundPsbtCoinSelect tests that the coin selection for a PSBT template

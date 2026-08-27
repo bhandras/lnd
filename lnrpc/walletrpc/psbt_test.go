@@ -24,6 +24,23 @@ type leaseOptionsWallet struct {
 	failCall    int
 }
 
+// legacyLeaseWallet records calls to the original lease method but does not
+// implement OutputLeaserWithOptions.
+type legacyLeaseWallet struct {
+	*mock.WalletController
+
+	leaseCalls int
+}
+
+// LeaseOutput records any fallback to the legacy lease path.
+func (w *legacyLeaseWallet) LeaseOutput(_ wtxmgr.LockID, _ wire.OutPoint,
+	_ time.Duration) (time.Time, error) {
+
+	w.leaseCalls++
+
+	return time.Unix(123, 0), nil
+}
+
 // LeaseOutputWithOptions records the requested behavior and optionally fails
 // one call so the partial-lock rollback path can be asserted.
 func (w *leaseOptionsWallet) LeaseOutputWithOptions(_ wtxmgr.LockID,
@@ -70,6 +87,25 @@ func TestLockInputsForwardsReleaseAfterSpend(t *testing.T) {
 	for _, opts := range wallet.leaseCalls {
 		require.Equal(t, uint32(6), opts.ReleaseAfterSpendConfs)
 	}
+}
+
+// TestLockInputsRejectsUnsupportedLeaseOptions verifies an option-bearing
+// FundPsbt lease fails before falling back to a time-only wallet lease.
+func TestLockInputsRejectsUnsupportedLeaseOptions(t *testing.T) {
+	t.Parallel()
+
+	wallet := &legacyLeaseWallet{
+		WalletController: &mock.WalletController{},
+	}
+
+	_, err := lockInputs(
+		wallet, []wire.OutPoint{{Index: 1}}, nil, time.Hour, 6,
+	)
+	require.ErrorContains(
+		t, err, "wallet does not support release-after-spend output leases",
+	)
+	require.Zero(t, wallet.leaseCalls,
+		"unsupported options must not create a shorter legacy lease")
 }
 
 // TestLockInputsRollbackUsesActualLockID verifies that a later lease failure
